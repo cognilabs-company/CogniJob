@@ -5,38 +5,76 @@ from database import get_async_session
 from sqlalchemy import insert, update, delete
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from .schemes import Gig, GigPost
-from models.models import user, gigs, gigs_category, gigs_skill, gigs_file
-from .schemes import GigCategoryPost, GigSkillPost, GigFilePost, GigSkill, GigFile, GigCategoryfull, GigFilefull, \
-    GigSkillfull, Gigfull, GigCategory
+from .schemes import Gig,GigPost
+from models.models import user,gigs
+from datetime import datetime
+from .schemes import   GigFilePost,GigFile,GigCategoryfull,GigFilefull,Gigfull,GigTag,GigTagfull,GigCategoryResponse
+from .schemes import GigResponse
+from .schemes import  GigCategory
+from .schemes import GigCategoryBase
+from models.models import gigs_category, gigs_tags, gigs_file, user,gig_tag_association
+from fastapi.responses import JSONResponse
+
 
 router_client = APIRouter(tags=["Client API"])
+router_public=APIRouter(tags=["Public API"])
+
+
+
+
+
+
 
 
 @router_client.post('/gigs', response_model=Gig, summary="Create a Gig")
-async def create_gig(new_gig: GigPost, token: dict = Depends(verify_token),
-                     session: AsyncSession = Depends(get_async_session)):
+async def create_gig(new_gig: GigPost, token: dict = Depends(verify_token), session: AsyncSession = Depends(get_async_session)):
     if token is None:
         raise HTTPException(status_code=401, detail="Not registered")
     user_id = token.get('user_id')
+
 
     result = await session.execute(select(user).where(user.c.id == user_id))
     user_data = result.fetchone()
     if not user_data:
         raise HTTPException(status_code=404, detail="User not found")
+    
 
     if not user_data.is_client:
         raise HTTPException(status_code=403, detail="Only clients can post gigs")
 
+    
+    category_result = await session.execute(select(gigs_category).where(gigs_category.c.id == new_gig.category_id))
+    category_data = category_result.fetchone()
+    if not category_data:
+        raise HTTPException(status_code=400, detail="Category not found")
+    
+
+
+
     new_gig_data = new_gig.dict()
     new_gig_data['user_id'] = user_id
+   
 
     query = insert(gigs).values(**new_gig_data).returning(gigs)
     result = await session.execute(query)
     created_gig = result.fetchone()
     await session.commit()
-
-    return created_gig
+    
+    return JSONResponse(
+        status_code=201,
+        content={
+            "message": "Gig successfully created",
+            "gig": {
+                "id": created_gig.id,
+                "gigs_title": created_gig.gigs_title,
+                "price": created_gig.price,
+                "duration": created_gig.duration,
+                "description": created_gig.description,
+                "status": created_gig.status,
+                "category_id": created_gig.category_id,
+                "user_id": created_gig.user_id
+            }
+        })
 
 
 @router_client.get('/gigs', response_model=List[Gig], summary="Get all Gigs by User")
@@ -54,16 +92,19 @@ async def get_user_gigs(token: dict = Depends(verify_token), session: AsyncSessi
     return user_gigs
 
 
+
 @router_client.delete('/gigs/{gig_id}', summary="Delete a Gig")
 async def delete_gig(
-        gig_id: int,
-        token: dict = Depends(verify_token),
-        session: AsyncSession = Depends(get_async_session)
+    gig_id: int,
+    token: dict = Depends(verify_token),
+    session: AsyncSession = Depends(get_async_session)
 ):
+   
     if token is None:
         raise HTTPException(status_code=401, detail="Not registered")
     user_id = token.get('user_id')
 
+  
     result = await session.execute(select(user).where(user.c.id == user_id))
     user_data = result.fetchone()
     if not user_data:
@@ -74,193 +115,24 @@ async def delete_gig(
     if not gig_data or gig_data.user_id != user_id:
         raise HTTPException(status_code=403, detail="You can only delete your own gigs")
 
+ 
     await session.execute(delete(gigs).where(gigs.c.id == gig_id))
     await session.commit()
 
     return {"detail": "Gig deleted successfully"}
 
 
-@router_client.get('/gigs/{gig_id}/categories', response_model=List[GigCategory], summary="Get Categories for a Gig")
-async def get_gig_categories(gig_id: int, token: dict = Depends(verify_token),
-                             session: AsyncSession = Depends(get_async_session)):
-    if token is None:
-        raise HTTPException(status_code=401, detail="Not registered")
-    user_id = token.get('user_id')
+from client.schemes import GigStatus
 
-    result = await session.execute(select(user).where(user.c.id == user_id))
-    user_data = result.fetchone()
-    if not user_data:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    result = await session.execute(select(gigs).where(gigs.c.id == gig_id))
-    gig_data = result.fetchone()
-    if not gig_data:
-        raise HTTPException(status_code=404, detail="Gig not found")
-
-    result = await session.execute(select(gigs_category).where(gigs_category.c.gigs_id == gig_id))
-    categories = result.fetchall()
-
-    if not categories:
-        raise HTTPException(status_code=404, detail="No categories found for this gig")
-
-    return categories
-
-
-@router_client.post('/gigs_category', summary="Create a Gig Category")
-async def create_gig_category(
-        new_category: GigCategoryPost,
-        token: dict = Depends(verify_token),
-        session: AsyncSession = Depends(get_async_session)
+@router_client.put('/gigs/{gig_id}/status', response_model=GigResponse, summary="Update a Gig")
+async def update_gig(
+    gig_id: int,
+    updated_gig: GigStatus,
+    token: dict = Depends(verify_token),
+    session: AsyncSession = Depends(get_async_session)
 ):
     if token is None:
         raise HTTPException(status_code=401, detail="Not registered")
-    user_id = token.get('user_id')
-
-    result = await session.execute(select(user).where(user.c.id == user_id))
-    user_data = result.fetchone()
-    if not user_data:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    if not user_data.is_client:
-        raise HTTPException(status_code=403, detail="Only clients can post categories")
-
-    result = await session.execute(select(gigs).where(gigs.c.id == new_category.gigs_id))
-    gig_data = result.fetchone()
-    if not gig_data:
-        raise HTTPException(status_code=404, detail="Gig not found")
-
-    if gig_data.user_id != user_id:
-        raise HTTPException(status_code=403, detail="You can only add categories to your own gigs")
-
-    new_category_data = new_category.dict()
-    query = insert(gigs_category).values(**new_category_data).returning(gigs_category)
-    result = await session.execute(query)
-    created_category = result.fetchone()
-    await session.commit()
-
-    if created_category:
-
-        created_category_dict = {
-            'id': created_category[0],
-            'category_name': created_category[1],
-            'gigs_id': created_category[2]
-
-        }
-
-        created_category_model = GigCategory(**created_category_dict)
-        return created_category_model.dict()
-    else:
-        raise HTTPException(status_code=500, detail="Failed to create category")
-
-
-@router_client.delete('/gigs/{gig_id}/categories/{category_id}', summary="Delete a Gig Category")
-async def delete_gig_category(
-        gig_id: int,
-        category_id: int,
-        token: dict = Depends(verify_token),
-        session: AsyncSession = Depends(get_async_session)
-):
-    if token is None:
-        raise HTTPException(status_code=401, detail="Not registered")
-
-    user_id = token.get('user_id')
-
-    result = await session.execute(select(user).where(user.c.id == user_id))
-    user_data = result.fetchone()
-    if not user_data:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    result = await session.execute(select(gigs).where(gigs.c.id == gig_id))
-    gig_data = result.fetchone()
-    if not gig_data or gig_data.user_id != user_id:
-        raise HTTPException(status_code=403, detail="You can only delete categories from your own gigs")
-
-    result = await session.execute(
-        select(gigs_category).where(gigs_category.c.id == category_id, gigs_category.c.gigs_id == gig_id))
-    category_data = result.fetchone()
-    if not category_data:
-        raise HTTPException(status_code=404, detail="Category not found for this gig")
-
-    await session.execute(delete(gigs_category).where(gigs_category.c.id == category_id))
-    await session.commit()
-
-    return {"detail": "Category deleted successfully"}
-
-
-@router_client.get('/gigs/{gig_id}/skill', response_model=List[GigSkill], summary="Get Categories for a Gig")
-async def get_gig_skill(gig_id: int, token: dict = Depends(verify_token),
-                        session: AsyncSession = Depends(get_async_session)):
-    if token is None:
-        raise HTTPException(status_code=401, detail="Not registered")
-    user_id = token.get('user_id')
-
-    result = await session.execute(select(user).where(user.c.id == user_id))
-    user_data = result.fetchone()
-    if not user_data:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    result = await session.execute(select(gigs).where(gigs.c.id == gig_id))
-    gig_data = result.fetchone()
-    if not gig_data:
-        raise HTTPException(status_code=404, detail="Gig not found")
-
-    result = await session.execute(select(gigs_skill).where(gigs_skill.c.gigs_id == gig_id))
-    skill = result.fetchall()
-
-    if not skill:
-        raise HTTPException(status_code=404, detail="No skill found for this gig")
-
-    return skill
-
-
-@router_client.post('/gigs_skill', summary="Create a Gig Skill")
-async def create_gig_skill(
-        new_skill: GigSkillPost,
-        token: dict = Depends(verify_token),
-        session: AsyncSession = Depends(get_async_session)
-):
-    if token is None:
-        raise HTTPException(status_code=401, detail="Not registered")
-    user_id = token.get('user_id')
-
-    result = await session.execute(select(user).where(user.c.id == user_id))
-    user_data = result.fetchone()
-    if not user_data:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    if not user_data.is_client:
-        raise HTTPException(status_code=403, detail="Only clients can post skills")
-
-    result = await session.execute(select(gigs).where((gigs.c.id == new_skill.gigs_id) & (gigs.c.user_id == user_id)))
-    gig_data = result.fetchone()
-    if not gig_data:
-        raise HTTPException(status_code=403,
-                            detail="Siz bu gigga skill qo'sha olmaysiz, chunki bu sizning gigingiz emas")
-
-    new_skill_data = new_skill.dict()
-    query = insert(gigs_skill).values(**new_skill_data).returning(gigs_skill)
-    result = await session.execute(query)
-    created_skill = result.fetchone()
-    await session.commit()
-
-    created_skill_data = {
-        'id': created_skill.id,
-        'skill_name': created_skill.skill_name,
-        'gigs_id': created_skill.gigs_id
-    }
-    return GigSkill(**created_skill_data)
-
-
-@router_client.delete('/gigs/{gig_id}/skills/{skill_id}', summary="Delete a Gig Skill")
-async def delete_gig_skill(
-        gig_id: int,
-        skill_id: int,
-        token: dict = Depends(verify_token),
-        session: AsyncSession = Depends(get_async_session)
-):
-    if token is None:
-        raise HTTPException(status_code=401, detail="Not registered")
-
     user_id = token.get('user_id')
 
     result = await session.execute(select(user).where(user.c.id == user_id))
@@ -271,23 +143,165 @@ async def delete_gig_skill(
     result = await session.execute(select(gigs).where(gigs.c.id == gig_id))
     gig_data = result.fetchone()
     if not gig_data or gig_data.user_id != user_id:
-        raise HTTPException(status_code=403, detail="You can only delete skills from your own gigs")
+        raise HTTPException(status_code=403, detail="You can only update your own gigs")
 
-    result = await session.execute(
-        select(gigs_skill).where(gigs_skill.c.id == skill_id, gigs_skill.c.gigs_id == gig_id))
-    skill_data = result.fetchone()
-    if not skill_data:
-        raise HTTPException(status_code=404, detail="Skill not found for this gig")
 
-    await session.execute(delete(gigs_skill).where(gigs_skill.c.id == skill_id))
+    query = update(gigs).where(gigs.c.id == gig_id).values(
+        status=updated_gig.status
+    )
+    await session.execute(query)
     await session.commit()
 
-    return {"detail": "Skill deleted successfully"}
+    result = await session.execute(select(gigs).where(gigs.c.id == gig_id))
+    updated_gig_data = result.fetchone()
+
+    
+    return JSONResponse(
+            status_code=201,
+            content={
+                "message": "Status successfully updated"
+            }
+        )
 
 
-@router_client.get('/gigs/{gig_id}/files', response_model=List[GigFile], summary="Get files for a specific gig")
-async def get_gig_files(gig_id: int, token: dict = Depends(verify_token),
-                        session: AsyncSession = Depends(get_async_session)):
+
+@router_client.get('/tag', response_model=List[GigTag], summary="Get all tags")
+async def get_tags(session: AsyncSession = Depends(get_async_session)):
+    query = select(gigs_tags)
+    result = await session.execute(query)
+    tags_data = result.fetchall()
+    
+
+    tags_list = [GigTag(id=row.id, tag_name=row.tag_name) for row in tags_data]
+
+    if not tags_list:
+        raise HTTPException(status_code=404, detail="No tags found")
+
+    return tags_list
+
+
+
+# @router_client.get('/gigs/tags', summary="Get all gigs with their tags")
+# async def get_all_gigs(session: AsyncSession = Depends(get_async_session)):
+ 
+#     gig_result = await session.execute(select(gigs))
+#     gigs_data = gig_result.fetchall()
+
+   
+#     tag_result = await session.execute(
+#         select(gigs.c.id, gigs_tags.c.id, gigs_tags.c.tag_name)
+#         .select_from(gigs.join(gig_tag_association, gigs.c.id == gig_tag_association.c.gig_id)
+#                       .join(gigs_tags, gig_tag_association.c.tag_id == gigs_tags.c.id))
+#     )
+#     tags_data = tag_result.fetchall()
+
+
+#     gig_tags_dict = {}
+#     for gig in gigs_data:
+#         gig_id = gig.id
+#         if gig_id not in gig_tags_dict:
+#             gig_tags_dict[gig_id] = {
+#                 "id": gig.id,
+#                 "gigs_title": gig.gigs_title,
+#                 "tags": []
+#             }
+#         for tag in tags_data:
+#             if tag.id == gig_id:
+#                 gig_tags_dict[gig_id]["tags"].append({
+#                     "id": tag.id,
+#                     "tag_name": tag.tag_name
+#                 })
+
+   
+#     return {"gigs": list(gig_tags_dict.values())}
+
+
+
+@router_client.post('/gigs/{gig_id}/tags', summary="Add tags to a Gig")
+async def add_tags_to_gig(
+    gig_id: int,
+    tag_ids: List[int],  
+    token: dict = Depends(verify_token),
+    session: AsyncSession = Depends(get_async_session)
+):
+    if token is None:
+        raise HTTPException(status_code=401, detail="Not registered")
+    user_id = token.get('user_id')
+
+   
+    result = await session.execute(select(gigs).where(gigs.c.id == gig_id))
+    gig_data = result.fetchone()
+    if not gig_data or gig_data.user_id != user_id:
+        raise HTTPException(status_code=403, detail="You can only add tags to your own gigs")
+
+   
+    for tag_id in tag_ids:
+        tag_result = await session.execute(select(gigs_tags).where(gigs_tags.c.id == tag_id))
+        tag_data = tag_result.fetchone()
+        if not tag_data:
+            raise HTTPException(status_code=404, detail=f"Tag with ID {tag_id} not found")
+
+       
+        insert_query = insert(gig_tag_association).values(gig_id=gig_id, tag_id=tag_id)
+        await session.execute(insert_query)
+
+    await session.commit()
+
+    return JSONResponse(
+        status_code=200,
+        content={"message": "Tags successfully added to the gig"}
+    )
+
+@router_client.get('/search/{tag_name}', response_model=List[GigResponse], summary="Get gigs by tag")
+async def get_gigs_by_tag(tag_name: str, session: AsyncSession = Depends(get_async_session)):
+ 
+    tag_query = select(gigs_tags.c.id).where(gigs_tags.c.tag_name == tag_name)
+    tag_result = await session.execute(tag_query)
+    tag_data = tag_result.fetchone()
+    
+    if not tag_data:
+        raise HTTPException(status_code=404, detail="Tag not found")
+
+    tag_id = tag_data[0]
+
+    
+    gig_query = (
+        select(gigs)
+        .select_from(
+            gigs.join(gig_tag_association, gigs.c.id == gig_tag_association.c.gig_id)
+        )
+        .where(gig_tag_association.c.tag_id == tag_id)
+    )
+    gig_result = await session.execute(gig_query)
+    gigs_data = gig_result.fetchall()
+
+    if not gigs_data:
+        raise HTTPException(status_code=404, detail="No gigs found for this tag")
+
+ 
+    gigs_list = [
+        GigResponse(
+            id=gig.id,
+            gigs_title=gig.gigs_title,
+            duration=gig.duration,
+            price=gig.price,
+            description=gig.description,
+            status=gig.status,
+            category_id=gig.category_id,
+            user_id=gig.user_id
+        ) for gig in gigs_data
+    ]
+
+    return gigs_list
+
+
+
+
+
+
+
+@router_client.get('/gigs/{gig_id}/files',response_model=List[GigFile], summary="Get files for a specific gig")
+async def get_gig_files(gig_id: int, token: dict = Depends(verify_token), session: AsyncSession = Depends(get_async_session)):
     if token is None:
         raise HTTPException(status_code=401, detail="Not registered")
     user_id = token.get('user_id')
@@ -296,11 +310,13 @@ async def get_gig_files(gig_id: int, token: dict = Depends(verify_token),
     user_data = result.fetchone()
     if not user_data:
         raise HTTPException(status_code=404, detail="User not found")
-
+    
+  
     result = await session.execute(select(gigs).where(gigs.c.id == gig_id))
     gig_data = result.fetchone()
     if not gig_data or gig_data.user_id != user_id:
         raise HTTPException(status_code=403, detail="You can only view files for your own gigs")
+
 
     result = await session.execute(select(gigs_file).where(gigs_file.c.gigs_id == gig_id))
     files = result.fetchall()
@@ -311,26 +327,29 @@ async def get_gig_files(gig_id: int, token: dict = Depends(verify_token),
     return files
 
 
+
 @router_client.post('/gigs_file', summary="Create a Gig File")
-async def create_gig_file(new_file: GigFilePost, token: dict = Depends(verify_token),
-                          session: AsyncSession = Depends(get_async_session)):
+async def create_gig_file(new_file: GigFilePost, token: dict = Depends(verify_token), session: AsyncSession = Depends(get_async_session)):
     if token is None:
         raise HTTPException(status_code=401, detail="Not registered")
     user_id = token.get('user_id')
 
+  
     result = await session.execute(select(user).where(user.c.id == user_id))
     user_data = result.fetchone()
     if not user_data:
         raise HTTPException(status_code=404, detail="User not found")
-
+    
+   
     if not user_data.is_client:
         raise HTTPException(status_code=403, detail="Only clients can post files")
+
 
     result = await session.execute(select(gigs).where(gigs.c.id == new_file.gigs_id))
     gig_data = result.fetchone()
     if not gig_data or gig_data.user_id != user_id:
         raise HTTPException(status_code=403, detail="You can only add files to your own gigs")
-
+    
     new_file_data = new_file.dict()
     query = insert(gigs_file).values(**new_file_data).returning(gigs_file)
     result = await session.execute(query)
@@ -345,16 +364,21 @@ async def create_gig_file(new_file: GigFilePost, token: dict = Depends(verify_to
     return GigFile(**created_file_data)
 
 
+
+
+
+
+
 @router_client.delete('/gigs/{gig_id}/files/{file_id}', summary="Delete a Gig File")
 async def delete_gig_file(
-        gig_id: int,
-        file_id: int,
-        token: dict = Depends(verify_token),
-        session: AsyncSession = Depends(get_async_session)
+    gig_id: int,
+    file_id: int,
+    token: dict = Depends(verify_token),
+    session: AsyncSession = Depends(get_async_session)
 ):
     if token is None:
         raise HTTPException(status_code=401, detail="Not registered")
-
+    
     user_id = token.get('user_id')
 
     result = await session.execute(select(user).where(user.c.id == user_id))
@@ -362,18 +386,240 @@ async def delete_gig_file(
     if not user_data:
         raise HTTPException(status_code=404, detail="User not found")
 
+
     result = await session.execute(select(gigs).where(gigs.c.id == gig_id))
     gig_data = result.fetchone()
     if not gig_data or gig_data.user_id != user_id:
         raise HTTPException(status_code=403, detail="You can only delete files from your own gigs")
 
+ 
     result = await session.execute(select(gigs_file).where(gigs_file.c.id == file_id, gigs_file.c.gigs_id == gig_id))
     file_data = result.fetchone()
     if not file_data:
         raise HTTPException(status_code=404, detail="File not found for this gig")
 
+
     await session.execute(delete(gigs_file).where(gigs_file.c.id == file_id))
     await session.commit()
 
     return {"detail": "File deleted successfully"}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+@router_public.get('/gigs', response_model=List[Gig], summary="Get all Gigs aaa User")
+async def get_public_gigs(session: AsyncSession = Depends(get_async_session)):
+    result = await session.execute(select(gigs))
+    gigs_list = result.fetchall()
+
+    if not gigs_list:
+        raise HTTPException(status_code=404, detail="No gigs found")
+
+    return gigs_list
+
+
+
+from fastapi import HTTPException, Query
+@router_public.get('/categories/{category_name}/gigs', response_model=List[GigResponse], summary="Get all Gigs for a specific Category by Name")
+async def get_gigs_by_category_name(
+    category_name: str,
+    session: AsyncSession = Depends(get_async_session)
+):
+
+    result = await session.execute(
+        select(gigs_category.c.id).where(gigs_category.c.category_name == category_name)
+    )
+    category_data = result.fetchone()
+
+    if not category_data:
+        raise HTTPException(status_code=404, detail="Category not found")
+
+    category_id = category_data.id
+
+    result = await session.execute(
+        select(gigs).where(gigs.c.category_id == category_id)
+    )
+    gigs_data = result.fetchall()
+
+    if not gigs_data:
+        raise HTTPException(status_code=404, detail="No gigs found for this category")
+
+   
+    gigs_list = [
+        GigResponse(
+            id=gig.id,
+            gigs_title=gig.gigs_title,
+            duration=gig.duration,
+            price=gig.price,
+            description=gig.description,
+            status=gig.status,
+            category_id=gig.category_id,
+            user_id=gig.user_id
+        )
+        for gig in gigs_data
+    ]
+
+    return gigs_list
+
+
+
+@router_public.get('/categories', response_model=List[GigCategoryResponse], summary="Get all Gig Categories")
+async def get_all_gig_categories(
+    session: AsyncSession = Depends(get_async_session)
+):
+ 
+    result = await session.execute(select(gigs_category))
+    categories_data = result.fetchall()
+    
+ 
+    categories = [
+        GigCategoryResponse(
+            id=category.id,
+            category_name=category.category_name
+        )
+        for category in categories_data
+    ]
+
+    return categories
+
+
+
+def convert_to_gig_model(gig_data, categories, tags, files):
+    categories_list = [GigCategoryfull(id=cat.id, category_name=cat.category_name) for cat in categories]
+    tags_list = [GigTagfull(id=tag.id, tag_name=tag.tag_name) for tag in tags]
+    files_list = [GigFilefull(id=file.id, file_url=file.file_url) for file in files]
+
+    return Gigfull(
+        id=gig_data.id,
+        gigs_title=gig_data.gigs_title,
+        duration=gig_data.duration,
+        price=gig_data.price,
+        description=gig_data.description,
+        user_id=gig_data.user_id,
+        categories=categories_list,
+        tags=tags_list,
+        files=files_list
+    )
+
+
+@router_public.get('/gigs/{gig_id}/full', response_model=Gigfull, summary="Get Gig with all details")
+async def get_gig_with_details(gig_id: int, session: AsyncSession = Depends(get_async_session)):
+
+    result = await session.execute(select(gigs).where(gigs.c.id == gig_id))
+    gig_data = result.fetchone()
+    if not gig_data:
+        raise HTTPException(status_code=404, detail="Gig not found")
+
+    result = await session.execute(select(gigs_category).where(gigs_category.c.id == gig_data.category_id))
+    categories = result.fetchall()
+
+    result = await session.execute(select(gigs_tags).join(gig_tag_association).where(gig_tag_association.c.gig_id == gig_id))
+    tags = result.fetchall()
+
+    result = await session.execute(select(gigs_file).where(gigs_file.c.gigs_id == gig_id))
+    files = result.fetchall()
+
+    return convert_to_gig_model(gig_data, categories, tags, files)
+
+
+from models.models import saved_client,seller
+
+
+@router_client.post('/saved_sellers', summary="Save a Seller")
+async def save_seller(
+    seller_id: int, 
+    token: dict = Depends(verify_token),
+    session: AsyncSession = Depends(get_async_session)
+):
+    if token is None:
+        raise HTTPException(status_code=401, detail="Not registered")
+    
+    user_id = token.get('user_id')
+    
+    result = await session.execute(select(user).where(user.c.id == user_id))
+    user_data = result.fetchone()
+    
+    if not user_data:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    if not user_data.is_client:
+        raise HTTPException(status_code=403, detail="Only clients can save sellers")
+
+    result = await session.execute(select(seller).where(seller.c.id == seller_id))
+    seller_data = result.fetchone()
+
+    if not seller_data:
+        raise HTTPException(status_code=404, detail="Seller not found")
+
+    query = insert(saved_client).values(user_id=user_id, seller_id=seller_id)
+    await session.execute(query)
+    await session.commit()
+
+    return {"detail": "Seller saved successfully"}
+
+@router_client.get('/saved_sellers', summary="Get Saved Sellers")
+async def get_saved_sellers(
+    token: dict = Depends(verify_token),
+    session: AsyncSession = Depends(get_async_session)
+):
+    if token is None:
+        raise HTTPException(status_code=401, detail="Not registered")
+    
+    user_id = token.get('user_id')
+    
+    result = await session.execute(select(saved_client).where(saved_client.c.user_id == user_id))
+    saved_sellers = result.fetchall()
+
+    if not saved_sellers:
+        raise HTTPException(status_code=404, detail="No saved sellers found")
+
+    sellers = []
+    for ss in saved_sellers:
+        sellers.append({
+            "id": ss.id,
+            "seller_id": ss.seller_id,
+            "user_id": ss.user_id,
+        })
+
+    return sellers
+
+@router_client.delete('/saved_sellers/{saved_seller_id}', summary="Delete Saved Seller")
+async def delete_saved_seller(
+    saved_seller_id: int,
+    token: dict = Depends(verify_token),
+    session: AsyncSession = Depends(get_async_session)
+):
+    if token is None:
+        raise HTTPException(status_code=401, detail="Not registered")
+    
+    user_id = token.get('user_id')
+    
+    result = await session.execute(select(saved_client).where(saved_client.c.id == saved_seller_id, saved_client.c.user_id == user_id))
+    saved_seller_data = result.fetchone()
+
+    if not saved_seller_data:
+        raise HTTPException(status_code=404, detail="Saved seller not found")
+
+    await session.execute(delete(saved_client).where(saved_client.c.id == saved_seller_id))
+    await session.commit()
+
+    return {"detail": "Saved seller deleted successfully"}
+
+
+
+
 
