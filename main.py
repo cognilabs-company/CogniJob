@@ -9,8 +9,9 @@ from models.models import user, gigs, gigs_category, gigs_skill, gigs_file
 from schemes import GigCategoryfull, GigFilefull, GigSkillfull, Gigfull, Gig
 from auth.auth import auth_router
 from client.client import router_client
+from admin.admin import admin_router
 
-app = FastAPI(title='Fitnessapp', version='1.0.0')
+app = FastAPI(title='CogniJobs', version='1.0.0')
 router = APIRouter()
 
 
@@ -66,5 +67,6 @@ async def get_gig_with_details(gig_id: int, session: AsyncSession = Depends(get_
     return convert_to_gig_model(gig_data, categories, skills, files)
 
 app.include_router(router, prefix='/main')
+app.include_router(admin_router, prefix='/admin')
 app.include_router(auth_router, prefix='/auth')
 app.include_router(router_client, prefix='/client')

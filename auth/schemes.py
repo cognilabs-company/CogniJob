@@ -22,6 +22,7 @@ class UserInDB(BaseModel):
     password: str
     is_seller: bool
     is_client: bool
+    is_admin: bool
 
 
 class UserLogin(BaseModel):
