@@ -35,13 +35,14 @@ async def register(
             return {'success': False, 'message': 'Username already exists!'}
 
         hash_password = pwd_context.hash(user_data.password1)
-        user_in_db = UserInDB(**dict(user_data), password=hash_password, registered_date=datetime.utcnow())
+        user_in_db = UserInDB(**dict(user_data), password=hash_password, registered_date=datetime.utcnow(), is_admin=False)
+        print(user_in_db)
         query = insert(user).values(**dict(user_in_db)).returning(user.c.id)
         result = await session.execute(query)
         user_id = result.scalar_one()
-        query1 = insert(client).values(user_id=user_id)
-        await session.execute(query)
-        await session.execute(query1)
+        if user_data.is_client:
+            query1 = insert(client).values(user_id=user_id)
+            await session.execute(query1)
         await session.commit()
         return {'success': True, 'message': 'Account created successfully'}
     else:
@@ -63,7 +64,7 @@ async def login(user_date: UserLogin, session: AsyncSession = Depends(get_async_
             return {'success': False, 'message': 'Username or password is not correct!'}
 
 
-@auth_router.get('/get_current_user')
+@auth_router.get('/get_current_user', response_model=List[UserResponse])
 async def get_current_user(
     token: dict = Depends(verify_token),
     session: AsyncSession = Depends(get_async_session)
@@ -74,22 +75,11 @@ async def get_current_user(
     user_id = token.get('user_id')
     user_info = select(user).where(user.c.id == user_id)
     user_result = await session.execute(user_info)
-    user_data = user_result.fetchone()
-    print(user_data)
+    user_data = user_result.fetchall()
     if user_data is None:
         raise HTTPException(status_code=404, detail='User not found')
 
-    user_dict = {
-        "id": user_data[0],
-        "first_name": user_data[1],
-        "last_name": user_data[2],
-        "email": user_data[3],
-        "username": user_data[4],
-        "registered_date": user_data[6],
-        "is_seller": user_data[7],
-        "is_client": user_data[8]
-    }
-    return user_dict
+    return user_data
 
 
 @auth_router.post('/add_seller')

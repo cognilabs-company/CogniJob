@@ -17,6 +17,7 @@ user = Table(
     Column('registered_date', TIMESTAMP, default=datetime.utcnow),
     Column('is_seller', Boolean, default=False),
     Column('is_client', Boolean, default=False),
+    Column('is_admin', Boolean, default=False),
 )
 
 seller = Table(
@@ -67,8 +68,7 @@ gigs_category = Table(
     'gigs_category',
     metadata,
     Column('id', Integer, primary_key=True, autoincrement=True),
-    Column('category_name', String, nullable=False),
-    Column('gigs_id', Integer, ForeignKey('gigs.id'))
+    Column('category_name', String, nullable=False)
 )
 
 client = Table(
