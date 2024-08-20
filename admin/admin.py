@@ -1,128 +1,130 @@
-from fastapi import Depends, HTTPException, APIRouter, status
-
-from .scheme import UserResponse
-from auth.utils import verify_token
-from typing import List
-from database import get_async_session
-from sqlalchemy import insert, update, delete
-from sqlalchemy.future import select
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from models.models import user, client, gigs_category
+from sqlalchemy.future import select
+from sqlalchemy import insert, delete
+from database import get_async_session
+from auth.utils import verify_token
+from models.models import user, saved_client, saved_seller, gigs_category, gigs_tags
+from admin.utils import superuser_check
+from admin.schemes import UserResponse, ClientCreate, TagCreate
+from typing import List
+from admin.schemes import GigCategoryPost
+from fastapi.responses import JSONResponse
 
-admin_router = APIRouter(tags=["Admin APIS"])
+router_superuser = APIRouter(tags=["Superuser API"])
 
-
-@admin_router.get('/get_all_users', response_model=List[UserResponse])
-async def get_all_users(
-        session: AsyncSession = Depends(get_async_session),
-        token: dict = Depends(verify_token)
+@router_superuser.get('/clients', response_model=List[UserResponse], summary="Get all Clients")
+async def get_clients(
+    user_data: dict = Depends(superuser_check),
+    session: AsyncSession = Depends(get_async_session)
 ):
-    if token is None:
-        raise HTTPException(status_code=403, detail='Forbidden')
+    result = await session.execute(select(user).where(user.c.is_client == True))
+    clients = result.fetchall()
+    if not clients:
+        raise HTTPException(status_code=404, detail="No clients found")
+    return clients
 
-    user_id = token.get('user_id')
-    admin = await session.execute(
-        select(user).where(
-            (user.c.id == user_id) &
-            (user.c.is_admin == True)
-        )
-    )
-    if not admin.scalar():
-        raise HTTPException(status_code=status.HTTP_405_METHOD_NOT_ALLOWED)
-
-    query = select(user)
-    users = await session.execute(query)
-    result = users.fetchall()
-    return result
-
-
-@admin_router.delete('/delete_user')
-async def delete_user(
-        user_id: int,
-        session: AsyncSession = Depends(get_async_session),
-        token: dict = Depends(verify_token)
+@router_superuser.post('/clients', summary="Add a Client")
+async def add_client(
+    client_data: ClientCreate,
+    user_data: dict = Depends(superuser_check),
+    session: AsyncSession = Depends(get_async_session)
 ):
-    if token is None:
-        raise HTTPException(status_code=403, detail='Forbidden')
+    new_client = client_data.dict()
+    new_client['is_client'] = True
 
-    admin = await session.execute(
-        select(user).where(
-            (user.c.id == token.get('user_id')) &
-            (user.c.is_admin == True)
+    result = await session.execute(select(user).where(
+        (user.c.username == new_client['username']) | 
+        (user.c.email == new_client['email'])
+    ))
+    existing_user = result.fetchone()
+
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A user with this username or email already exists."
         )
-    )
-    if not admin.scalar():
-        raise HTTPException(status_code=status.HTTP_405_METHOD_NOT_ALLOWED)
 
-    check_user = select(user).where(user.c.id == user_id)
-    data = await session.execute(check_user)
-    if not data.fetchone():
-        raise HTTPException(status_code=404, detail='User not found')
-    query = delete(client).where(client.c.user_id == user_id)
-    query1 = delete(user).where(user.c.id == user_id)
-    await session.execute(query)
-    await session.execute(query1)
-    await session.commit()
-    return {"success": True}
-
-
-@admin_router.post('/create_category')
-async def create_category(
-        category_name: str,
-        session: AsyncSession = Depends(get_async_session),
-        token: dict = Depends(verify_token)
-):
-    if token is None:
-        raise HTTPException(status_code=403, detail='Forbidden')
-
-    admin = await session.execute(
-        select(user).where(
-            (user.c.id == token.get('user_id')) &
-            (user.c.is_admin == True)
-        )
-    )
-    if not admin.scalar():
-        raise HTTPException(status_code=status.HTTP_405_METHOD_NOT_ALLOWED)
-
-    existing_category = await session.execute(
-        select(gigs_category).where(gigs_category.c.category_name == category_name)
-    )
-    if existing_category.scalar():
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Category already exists")
-
-    query = insert(gigs_category).values(category_name=category_name)
+    query = insert(user).values(**new_client)
     await session.execute(query)
     await session.commit()
-    return {"success": True}
 
+    return {"detail": "Client added successfully"}
 
-@admin_router.delete('/delete_category/{category_id}')
-async def delete_category(
-        category_id: int,
-        session: AsyncSession = Depends(get_async_session),
-        token: dict = Depends(verify_token)
+@router_superuser.post('/gigs_category', summary="Create a Gig Category")
+async def create_gig_category(
+    new_category: GigCategoryPost,
+    user_data: dict = Depends(superuser_check),
+    session: AsyncSession = Depends(get_async_session)
 ):
-    if token is None:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Forbidden')
+    new_category_data = new_category.dict()
+    query = insert(gigs_category).values(**new_category_data).returning(gigs_category)
+    result = await session.execute(query)
+    created_category = result.fetchone()
+    await session.commit()
 
-    admin = await session.execute(
-        select(user).where(
-            (user.c.id == token.get('user_id')) &
-            (user.c.is_admin == True)
+    if created_category:
+        return JSONResponse(
+            status_code=201,
+            content={
+                "message": "Category successfully created"
+            }
         )
-    )
-    if not admin.scalar():
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
+    else:
+        raise HTTPException(status_code=500, detail="Failed to create category")
 
-    category_to_delete = await session.execute(
-        select(gigs_category).where(gigs_category.c.id == category_id)
-    )
-    category_record = category_to_delete.scalar()
+@router_superuser.delete('/categories/{category_id}', summary="Delete a Category")
+async def delete_gig_category(
+    category_id: int,
+    user_data: dict = Depends(superuser_check),
+    session: AsyncSession = Depends(get_async_session)
+):
+    result = await session.execute(select(gigs_category).where(gigs_category.c.id == category_id))
+    category_data = result.fetchone()
+    if not category_data:
+        raise HTTPException(status_code=404, detail="Category not found")
 
-    if not category_record:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category not found")
+    await session.execute(delete(gigs_category).where(gigs_category.c.id == category_id))
+    await session.commit()
 
-    query = delete(gigs_category).where(gigs_category.c.id == category_id)
+    return {"detail": "Category deleted successfully"}
+
+@router_superuser.post('/tags', summary="Create a new tag")
+async def create_tag(
+    new_tag: TagCreate,
+    user_data: dict = Depends(superuser_check),
+    session: AsyncSession = Depends(get_async_session)
+):
+    tag_data = new_tag.dict()
+    query = insert(gigs_tags).values(**tag_data)
     await session.execute(query)
     await session.commit()
-    return {"success": True}
+
+    return JSONResponse(
+        status_code=201,
+        content={
+            "message": "Tag successfully created"
+        }
+    )
+
+@router_superuser.delete('/tags/{tag_id}', summary="Delete a tag")
+async def delete_tag(
+    tag_id: int,
+    user_data: dict = Depends(superuser_check),
+    session: AsyncSession = Depends(get_async_session)
+):
+    query = select(gigs_tags.c.id).where(gigs_tags.c.id == tag_id)
+    result = await session.execute(query)
+    tag_data = result.fetchone()
+
+    if not tag_data:
+        raise HTTPException(status_code=404, detail="Tag not found")
+
+    delete_query = delete(gigs_tags).where(gigs_tags.c.id == tag_id)
+    await session.execute(delete_query)
+    await session.commit()
+
+    return JSONResponse(
+        status_code=200,
+        content={"message": "Tag successfully deleted"}
+    )
