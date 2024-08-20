@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, APIRouter
+from fastapi import FastAPI, Depends, HTTPException, APIRouter, UploadFile
 from auth.utils import verify_token
 from typing import List
 from database import get_async_session
@@ -63,17 +63,7 @@ async def create_gig(new_gig: GigPost, token: dict = Depends(verify_token), sess
     return JSONResponse(
         status_code=201,
         content={
-            "message": "Gig successfully created",
-            "gig": {
-                "id": created_gig.id,
-                "gigs_title": created_gig.gigs_title,
-                "price": created_gig.price,
-                "duration": created_gig.duration,
-                "description": created_gig.description,
-                "status": created_gig.status,
-                "category_id": created_gig.category_id,
-                "user_id": created_gig.user_id
-            }
+            "message": "Gig successfully created"
         })
 
 
@@ -327,9 +317,9 @@ async def get_gig_files(gig_id: int, token: dict = Depends(verify_token), sessio
     return files
 
 
-
+import aiofiles
 @router_client.post('/gigs_file', summary="Create a Gig File")
-async def create_gig_file(new_file: GigFilePost, token: dict = Depends(verify_token), session: AsyncSession = Depends(get_async_session)):
+async def create_gig_file(file: UploadFile, gig_id: int, token: dict = Depends(verify_token), session: AsyncSession = Depends(get_async_session)):
     if token is None:
         raise HTTPException(status_code=401, detail="Not registered")
     user_id = token.get('user_id')
@@ -340,28 +330,28 @@ async def create_gig_file(new_file: GigFilePost, token: dict = Depends(verify_to
     if not user_data:
         raise HTTPException(status_code=404, detail="User not found")
     
+    if file is not None:
+        out_file = f'/{file.filename}'
+        async with aiofiles.open(f'gig_file/{out_file}', 'wb') as f:
+            content = await file.read()
+            await f.write(content)
+        
    
     if not user_data.is_client:
         raise HTTPException(status_code=403, detail="Only clients can post files")
 
 
-    result = await session.execute(select(gigs).where(gigs.c.id == new_file.gigs_id))
+    result = await session.execute(select(gigs).where(gigs.c.id == gig_id))
     gig_data = result.fetchone()
     if not gig_data or gig_data.user_id != user_id:
         raise HTTPException(status_code=403, detail="You can only add files to your own gigs")
     
-    new_file_data = new_file.dict()
-    query = insert(gigs_file).values(**new_file_data).returning(gigs_file)
+    
+    query = insert(gigs_file).values(gigs_id=gig_id, file_url=out_file)
     result = await session.execute(query)
-    created_file = result.fetchone()
+    
     await session.commit()
-
-    created_file_data = {
-        'id': created_file.id,
-        'file_url': created_file.file_url,
-        'gigs_id': created_file.gigs_id
-    }
-    return GigFile(**created_file_data)
+    return {"success": True}
 
 
 
@@ -433,8 +423,68 @@ async def get_public_gigs(session: AsyncSession = Depends(get_async_session)):
 
 
 
+def convert_to_gig_model(gig_data, categories, tags, files):
+    categories_list = [GigCategoryfull(id=cat.id, category_name=cat.category_name) for cat in categories]
+    tags_list = [GigTagfull(id=tag.id, tag_name=tag.tag_name) for tag in tags]
+    files_list = [GigFilefull(id=file.id, file_url=file.file_url) for file in files]
+
+    return Gigfull(
+        id=gig_data.id,
+        gigs_title=gig_data.gigs_title,
+        duration=gig_data.duration,
+        price=gig_data.price,
+        description=gig_data.description,
+        user_id=gig_data.user_id,
+        categories=categories_list,
+        tags=tags_list,
+        files=files_list
+    )
+
+
+@router_public.get('/gigs/{gig_id}/full', response_model=Gigfull, summary="Get Gig with all details")
+async def get_gig_with_details(gig_id: int, session: AsyncSession = Depends(get_async_session)):
+
+    result = await session.execute(select(gigs).where(gigs.c.id == gig_id))
+    gig_data = result.fetchone()
+    if not gig_data:
+        raise HTTPException(status_code=404, detail="Gig not found")
+
+    result = await session.execute(select(gigs_category).where(gigs_category.c.id == gig_data.category_id))
+    categories = result.fetchall()
+
+    result = await session.execute(select(gigs_tags).join(gig_tag_association).where(gig_tag_association.c.gig_id == gig_id))
+    tags = result.fetchall()
+
+    result = await session.execute(select(gigs_file).where(gigs_file.c.gigs_id == gig_id))
+    files = result.fetchall()
+
+    return convert_to_gig_model(gig_data, categories, tags, files)
+
+
+
+@router_public.get('/categories', response_model=List[GigCategoryResponse], summary="Get all Gig Categories")
+async def get_all_gig_categories(
+    session: AsyncSession = Depends(get_async_session)
+):
+ 
+    result = await session.execute(select(gigs_category))
+    categories_data = result.fetchall()
+    
+ 
+    categories = [
+        GigCategoryResponse(
+            id=category.id,
+            category_name=category.category_name
+        )
+        for category in categories_data
+    ]
+
+    return categories
+
+
+
 from fastapi import HTTPException, Query
-@router_public.get('/categories/{category_name}/gigs', response_model=List[GigResponse], summary="Get all Gigs for a specific Category by Name")
+@router_public.get('/search/{category_name}/gigs', response_model=List[GigResponse], summary="Get all Gigs for a specific Category by Name")
 async def get_gigs_by_category_name(
     category_name: str,
     session: AsyncSession = Depends(get_async_session)
@@ -476,64 +526,6 @@ async def get_gigs_by_category_name(
     return gigs_list
 
 
-
-@router_public.get('/categories', response_model=List[GigCategoryResponse], summary="Get all Gig Categories")
-async def get_all_gig_categories(
-    session: AsyncSession = Depends(get_async_session)
-):
- 
-    result = await session.execute(select(gigs_category))
-    categories_data = result.fetchall()
-    
- 
-    categories = [
-        GigCategoryResponse(
-            id=category.id,
-            category_name=category.category_name
-        )
-        for category in categories_data
-    ]
-
-    return categories
-
-
-
-def convert_to_gig_model(gig_data, categories, tags, files):
-    categories_list = [GigCategoryfull(id=cat.id, category_name=cat.category_name) for cat in categories]
-    tags_list = [GigTagfull(id=tag.id, tag_name=tag.tag_name) for tag in tags]
-    files_list = [GigFilefull(id=file.id, file_url=file.file_url) for file in files]
-
-    return Gigfull(
-        id=gig_data.id,
-        gigs_title=gig_data.gigs_title,
-        duration=gig_data.duration,
-        price=gig_data.price,
-        description=gig_data.description,
-        user_id=gig_data.user_id,
-        categories=categories_list,
-        tags=tags_list,
-        files=files_list
-    )
-
-
-@router_public.get('/gigs/{gig_id}/full', response_model=Gigfull, summary="Get Gig with all details")
-async def get_gig_with_details(gig_id: int, session: AsyncSession = Depends(get_async_session)):
-
-    result = await session.execute(select(gigs).where(gigs.c.id == gig_id))
-    gig_data = result.fetchone()
-    if not gig_data:
-        raise HTTPException(status_code=404, detail="Gig not found")
-
-    result = await session.execute(select(gigs_category).where(gigs_category.c.id == gig_data.category_id))
-    categories = result.fetchall()
-
-    result = await session.execute(select(gigs_tags).join(gig_tag_association).where(gig_tag_association.c.gig_id == gig_id))
-    tags = result.fetchall()
-
-    result = await session.execute(select(gigs_file).where(gigs_file.c.gigs_id == gig_id))
-    files = result.fetchall()
-
-    return convert_to_gig_model(gig_data, categories, tags, files)
 
 
 from models.models import saved_client,seller

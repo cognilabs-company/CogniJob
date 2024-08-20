@@ -5,11 +5,11 @@ from passlib.context import CryptContext
 from sqlalchemy import select, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
-
+from sqlalchemy.exc import NoResultFound
 from .schemes import UserRegister, UserInDB, UserLogin, UserResponse
 from .utils import generate_token, verify_token
 from database import get_async_session
-from models.models import user, seller, client
+from models.models import user , seller
 
 auth_router = APIRouter()
 pwd_context = CryptContext(schemes=['bcrypt'], deprecated='auto')
@@ -17,54 +17,69 @@ pwd_context = CryptContext(schemes=['bcrypt'], deprecated='auto')
 
 @auth_router.post('/register')
 async def register(
-        user_data: UserRegister,
+        user1: UserRegister,
         session: AsyncSession = Depends(get_async_session)
 ):
-    if user_data.password1 == user_data.password2:
+        if user1.password1 != user1.password2:
+            raise HTTPException(status_code=400, detail='Passwords are not the same!')
 
-        email_exists = await session.execute(select(user).where(user.c.email == user_data.email))
-        email_exists_value = email_exists.scalar()
+        username_query = select(user).where(user.c.username == user1.username)
+        email_query = select(user).where(user.c.email == user1.email)
 
-        if email_exists_value is not None:
-            return {'success': False, 'message': 'Email already exists!'}
+        username_result = await session.execute(username_query)
+        email_result = await session.execute(email_query)
 
-        username_exists = await session.execute(select(user).where(user.c.username == user_data.username))
-        username_exists_value = username_exists.scalar()
+        if username_result.first():
+            raise HTTPException(status_code=400, detail="Username already in use")
+        if email_result.first():
+            raise HTTPException(status_code=400, detail="Email already in use")
+        password=pwd_context.hash(user1.password1)
+        user_count=await  session.execute(select(user))
+        user_count = len(user_count.fetchall())
 
-        if username_exists_value is not None:
-            return {'success': False, 'message': 'Username already exists!'}
+        is_superuser=user_count==0
 
-        hash_password = pwd_context.hash(user_data.password1)
-        user_in_db = UserInDB(**dict(user_data), password=hash_password, registered_date=datetime.utcnow(), is_admin=False)
-        print(user_in_db)
-        query = insert(user).values(**dict(user_in_db)).returning(user.c.id)
-        result = await session.execute(query)
-        user_id = result.scalar_one()
-        if user_data.is_client:
-            query1 = insert(client).values(user_id=user_id)
-            await session.execute(query1)
+        user_in_db=UserInDB(**dict(user1),password=password,registered_date=datetime.utcnow(),is_superuser=is_superuser)
+        query=insert(user).values(**dict(user_in_db))
+        await session.execute(query)
         await session.commit()
         return {'success': True, 'message': 'Account created successfully'}
-    else:
-        raise HTTPException(status_code=400, detail='Passwords are not the same !')
+
+# @auth_router.post('/login')
+# async def login(user_date: UserLogin, session: AsyncSession = Depends(get_async_session)):
+#     query = select(user).where(user.c.username == user_date.username)
+#     userdata = await session.execute(query)
+#     user_result = userdata.one_or_none()
+#     if user_result is None:
+#         return {'success': False, 'message': 'Email or password is not correct!'}
+#     else:
+#         if pwd_context.verify(user_date.password, user_result.password):
+#             token = generate_token(user_result.id)
+#             return token
+#         else:
+#             return {'success': False, 'message': 'Email or password is not correct!'}
+
 
 
 @auth_router.post('/login')
 async def login(user_date: UserLogin, session: AsyncSession = Depends(get_async_session)):
     query = select(user).where(user.c.username == user_date.username)
     userdata = await session.execute(query)
-    user_result = userdata.one_or_none()
-    if user_result is None:
-        return {'success': False, 'message': 'Username or password is not correct!'}
+
+    try:
+        userdata = userdata.one()
+    except NoResultFound:
+        raise HTTPException(status_code=404, detail="Username or password is incorrect")
+    if pwd_context.verify(user_date.password, userdata.password):
+        token = generate_token(userdata.id)
+        return token
     else:
-        if pwd_context.verify(user_date.password, user_result.password):
-            token = generate_token(user_result.id)
-            return token
-        else:
-            return {'success': False, 'message': 'Username or password is not correct!'}
+        raise HTTPException(status_code=404, detail='Username or password is incorrect')
+    
+    
 
 
-@auth_router.get('/get_current_user', response_model=List[UserResponse])
+@auth_router.get('/get_current_user')
 async def get_current_user(
     token: dict = Depends(verify_token),
     session: AsyncSession = Depends(get_async_session)
@@ -75,11 +90,22 @@ async def get_current_user(
     user_id = token.get('user_id')
     user_info = select(user).where(user.c.id == user_id)
     user_result = await session.execute(user_info)
-    user_data = user_result.fetchall()
+    user_data = user_result.fetchone()
+    print(user_data)
     if user_data is None:
         raise HTTPException(status_code=404, detail='User not found')
 
-    return user_data
+    user_dict = {
+        "id": user_data[0],
+        "first_name": user_data[1],
+        "last_name": user_data[2],
+        "email": user_data[3],
+        "username": user_data[4],
+        "registered_date": user_data[6],
+        "is_seller": user_data[7],
+        "is_client": user_data[8]
+    }
+    return user_dict
 
 
 @auth_router.post('/add_seller')

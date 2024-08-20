@@ -29,8 +29,7 @@ seller = Table(
     Column('image_url', Text),
     Column('description', Text),
     Column('cv_url', Text),
-    Column('birth_date', Date),
-    Column('active_gigs', Integer)
+    Column('birth_date', Date)
 )
 
 skills = Table(
