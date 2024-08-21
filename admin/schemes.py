@@ -2,6 +2,7 @@ from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
 
+
 class UserResponse(BaseModel):
     id: int
     first_name: str
@@ -14,20 +15,19 @@ class UserResponse(BaseModel):
     is_superuser: bool
 
 
-
 class ClientCreate(BaseModel):
     first_name: str
     last_name: str
     email: str
     username: str
-    password: str    
-
-
+    password: str
+    is_seller: bool
+    is_client: bool
+    is_superuser:bool
 
 
 class GigCategoryPost(BaseModel):
     category_name: str   
-
 
 
 class TagCreate(BaseModel):

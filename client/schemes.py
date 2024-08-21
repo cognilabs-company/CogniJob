@@ -23,17 +23,14 @@ class Gig(BaseModel):
     user_id: int
 
 
- 
-
 class GigStatus(BaseModel):
     status:bool
  
 
-
-
 class GigTag(BaseModel):
     id: int
     tag_name: str
+
 
 class GigFilePost(BaseModel):
     file_url: str
@@ -59,13 +56,16 @@ class GigTagfull(BaseModel):
     id: int
     tag_name: str
 
+
 class GigCategoryfull(BaseModel):
     id: int
     category_name: str
 
+
 class GigFilefull(BaseModel):
     id: int
     file_url: str
+
 
 class Gigfull(BaseModel):
     id: int
@@ -77,6 +77,7 @@ class Gigfull(BaseModel):
     categories: List[GigCategoryfull]
     tags: List[GigTagfull]
     files: List[GigFilefull]
+
 
 class GigResponse(BaseModel):
     id: int
@@ -97,7 +98,34 @@ class GigSkillPostPut(BaseModel):
     skill_name: str    
 
 
-
 class GigCategoryResponse(BaseModel):
     id: int
     category_name: str    
+
+
+class GigFileResponse(BaseModel):
+    id: int
+    file_url: str
+
+
+class GigTagResponse(BaseModel):
+    id: int
+    tag_name: str
+
+
+class GigCategoryResponse(BaseModel):
+    id: int
+    category_name: str
+
+
+class GigResponsesearch(BaseModel):
+    id: int
+    gigs_title: str
+    duration: int
+    price: float
+    description: str
+    status: bool
+    category: GigCategoryResponse
+    tags: List[GigTagResponse]
+    files: List[GigFileResponse]
+    user_id: int
