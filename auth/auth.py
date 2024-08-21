@@ -45,20 +45,6 @@ async def register(
         await session.commit()
         return {'success': True, 'message': 'Account created successfully'}
 
-# @auth_router.post('/login')
-# async def login(user_date: UserLogin, session: AsyncSession = Depends(get_async_session)):
-#     query = select(user).where(user.c.username == user_date.username)
-#     userdata = await session.execute(query)
-#     user_result = userdata.one_or_none()
-#     if user_result is None:
-#         return {'success': False, 'message': 'Email or password is not correct!'}
-#     else:
-#         if pwd_context.verify(user_date.password, user_result.password):
-#             token = generate_token(user_result.id)
-#             return token
-#         else:
-#             return {'success': False, 'message': 'Email or password is not correct!'}
-
 
 
 @auth_router.post('/login')

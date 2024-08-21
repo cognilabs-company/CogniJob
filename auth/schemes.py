@@ -14,6 +14,7 @@ class UserRegister(BaseModel):
     is_client: bool
 
 
+
 class UserInDB(BaseModel):
     first_name: str
     last_name: str

@@ -22,6 +22,6 @@ async def superuser_check(
     user_data = result.fetchone()
 
     if not user_data or not user_data.is_superuser:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="you have not permission")
 
     return user_data
