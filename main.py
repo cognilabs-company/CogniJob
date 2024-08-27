@@ -2,6 +2,7 @@ from fastapi import APIRouter, FastAPI
 from auth.auth import auth_router
 from client.client import router_client,router_public
 from admin.admin import router_superuser
+from seller.seller import seller_router
 
 
 
@@ -20,6 +21,7 @@ app.include_router(auth_router, prefix='/auth')
 app.include_router(router_client)
 app.include_router(router_public,prefix="/public")
 app.include_router(router_superuser,prefix='/superuser')
+app.include_router(seller_router)
 
 
 

@@ -1,8 +1,20 @@
 from pydantic import BaseModel
 from datetime import datetime, time
 from typing import List, Optional
+from enum import Enum
 
 
+
+class JobTypeEnum(str,Enum):
+    full_time = "full_time"
+    part_time = "part_time"
+    contract = "contract"
+    one_time_project = "one_time_project"
+    internship = "internship"
+
+class WorkModeEnum(str,Enum):
+    online = "online"
+    offline = "offline"
 
 class GigPost(BaseModel):
     gigs_title: str
@@ -10,6 +22,9 @@ class GigPost(BaseModel):
     duration: int
     description: str
     category_id:int
+    job_type: JobTypeEnum  # Enum tipini qo'shish
+    work_mode: WorkModeEnum  # Enum tipini qo'shish
+
 
 
 class Gig(BaseModel):
@@ -21,6 +36,9 @@ class Gig(BaseModel):
     status:bool
     category_id:int
     user_id: int
+    job_type: JobTypeEnum  # Enum tipini qo'shish
+    work_mode: WorkModeEnum  # Enum tipini qo'shish
+
 
 
 class GigStatus(BaseModel):
@@ -77,6 +95,9 @@ class Gigfull(BaseModel):
     categories: List[GigCategoryfull]
     tags: List[GigTagfull]
     files: List[GigFilefull]
+    job_type: JobTypeEnum  # Enum tipini qo'shish
+    work_mode: WorkModeEnum  # Enum tipini qo'shish
+ 
 
 
 class GigResponse(BaseModel):
@@ -88,6 +109,9 @@ class GigResponse(BaseModel):
     status: bool
     category_id: int
     user_id: int
+    job_type: JobTypeEnum  # Enum tipini qo'shish
+    work_mode: WorkModeEnum  # Enum tipini qo'shish
+  
 
 
 class GigCategoryBase(BaseModel):
@@ -125,7 +149,10 @@ class GigResponsesearch(BaseModel):
     price: float
     description: str
     status: bool
+    job_type: JobTypeEnum  # Enum tipini qo'shish
+    work_mode: WorkModeEnum  # Enum tipini qo'shish
     category: GigCategoryResponse
     tags: List[GigTagResponse]
     files: List[GigFileResponse]
     user_id: int
+

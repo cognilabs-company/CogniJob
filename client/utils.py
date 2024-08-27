@@ -22,6 +22,8 @@ def convert_to_gig_model(gig_data, categories, tags, files):
         price=gig_data.price,
         description=gig_data.description,
         user_id=gig_data.user_id,
+        job_type=gig_data.job_type,
+        work_mode=gig_data.work_mode,
         categories=categories_list,
         tags=tags_list,
         files=files_list
