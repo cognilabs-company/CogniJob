@@ -14,16 +14,20 @@ from models.models import (gigs_category, gigs_tags, gigs_file,
 user,gig_tag_association,saved_client,seller,user,gigs)
 from fastapi.responses import JSONResponse
 from client.utils import convert_to_gig_model
-
-
+from enum import Enum
 from fastapi import HTTPException, Query
+
+
 
 router_client = APIRouter(tags=["Client API"])
 router_public=APIRouter(tags=["Public API"])
 
 
 
-@router_client.post('/gig', summary="Create a Gig")
+
+
+
+@router_client.post('/gig',summary="Create a Gig")
 async def create_gig(new_gig: GigPost, token: dict = Depends(verify_token), session: AsyncSession = Depends(get_async_session)):
     if token is None:
         raise HTTPException(status_code=401, detail="Not registered")
@@ -127,7 +131,10 @@ async def delete_gig(
     await session.execute(delete(gigs).where(gigs.c.id == gig_id))
     await session.commit()
 
-    return {"detail": "Gig deleted successfully"}
+    return JSONResponse(
+        status_code=200,
+        content={"message": "Gig deleted successfully"}
+    )
 
 
 
@@ -258,7 +265,11 @@ async def create_gig_file(file: UploadFile, gig_id: int, token: dict = Depends(v
     result = await session.execute(query)
     
     await session.commit()
-    return {"success": True}
+    return JSONResponse(
+        status_code=201,
+        content={"message": "File successfully created"}
+    )
+
 
 
 
@@ -328,7 +339,11 @@ async def delete_gig_file(
     await session.execute(delete(gigs_file).where(gigs_file.c.id == file_id))
     await session.commit()
 
-    return {"detail": "File deleted successfully"}
+
+    return JSONResponse(
+        status_code=200,
+        content={"message": "File deleted successfully"}
+    )
 
 
 
@@ -362,7 +377,11 @@ async def save_seller(
     await session.execute(query)
     await session.commit()
 
-    return {"detail": "Seller saved successfully"}
+    return JSONResponse(
+        status_code=201,
+        content={"message": "Seller saved successfully"}
+    )
+
 
 
 
@@ -386,8 +405,9 @@ async def get_saved_sellers(
     for ss in saved_sellers:
         sellers.append({
             "id": ss.id,
-            "seller_id": ss.seller_id,
-            "user_id": ss.user_id,
+            "client_id": ss.user_id,
+            "save_seller_id": ss.seller_id,
+            
         })
 
     return sellers
@@ -415,7 +435,11 @@ async def delete_saved_seller(
     await session.execute(delete(saved_client).where(saved_client.c.id == saved_seller_id))
     await session.commit()
 
-    return {"detail": "Saved seller deleted successfully"}
+  
+    return JSONResponse(
+        status_code=200,
+        content={"message": "Saved seller deleted successfully"}
+    )
 
 
 
@@ -491,6 +515,8 @@ async def get_gigs_by_category_name(
             description=gig.description,
             status=gig.status,
             category_id=gig.category_id,
+            job_type=gig.job_type,
+            work_mode=gig.work_mode,
             user_id=gig.user_id
         )
         for gig in gigs_data
@@ -516,7 +542,7 @@ async def get_gigs_by_tag(tag_name: str, session: AsyncSession = Depends(get_asy
     gig_query = (
         select(
             gigs.c.id, gigs.c.gigs_title, gigs.c.duration, gigs.c.price, 
-            gigs.c.description, gigs.c.status, gigs.c.user_id,
+            gigs.c.description, gigs.c.status,gigs.c.job_type,gigs.c.work_mode, gigs.c.user_id,
             gigs_category.c.id.label("category_id"),
             gigs_category.c.category_name,
             gigs_tags.c.id.label("tag_id"), 
@@ -552,6 +578,8 @@ async def get_gigs_by_tag(tag_name: str, session: AsyncSession = Depends(get_asy
                 price=row.price,
                 description=row.description,
                 status=row.status,
+                job_type=row.job_type,
+                work_mode=row.work_mode,
                 user_id=row.user_id,
                 category=GigCategoryResponse(id=row.category_id, category_name=row.category_name),
                 tags=[],
@@ -569,3 +597,10 @@ async def get_gigs_by_tag(tag_name: str, session: AsyncSession = Depends(get_asy
             gig_response.files.append(GigFileResponse(id=row.file_id, file_url=row.file_url))
 
     return list(gigs_dict.values())
+
+
+
+
+
+
+

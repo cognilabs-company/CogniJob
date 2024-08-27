@@ -25,14 +25,22 @@ async def register(
 
         username_query = select(user).where(user.c.username == user1.username)
         email_query = select(user).where(user.c.email == user1.email)
+        telegram_query=select(user).where(user.c.telegram_username == user1.telegram_username)
+        phone_query=select(user).where(user.c.phone_number == user1.phone_number)
 
         username_result = await session.execute(username_query)
         email_result = await session.execute(email_query)
+        telegram_result = await session.execute(telegram_query)
+        phone_result= await session.execute(phone_query)
 
         if username_result.first():
             raise HTTPException(status_code=400, detail="Username already in use")
         if email_result.first():
             raise HTTPException(status_code=400, detail="Email already in use")
+        if telegram_result.first():
+            raise HTTPException(status_code=400, detail="Telegram username in use")
+        if phone_result.first():
+            raise HTTPException(status_code=400, detail="Phone already in use")
         password=pwd_context.hash(user1.password1)
         user_count=await  session.execute(select(user))
         user_count = len(user_count.fetchall())
@@ -41,8 +49,16 @@ async def register(
 
         user_in_db=UserInDB(**dict(user1),password=password,registered_date=datetime.utcnow(),is_superuser=is_superuser)
         query=insert(user).values(**dict(user_in_db))
-        await session.execute(query)
+        result=await session.execute(query)
         await session.commit()
+
+        user_id = result.inserted_primary_key[0]
+
+  
+        if user1.is_seller:
+            seller_query = insert(seller).values(user_id=user_id)
+            await session.execute(seller_query)
+            await session.commit()
         return {'success': True, 'message': 'Account created successfully'}
 
 
@@ -89,7 +105,8 @@ async def get_current_user(
         "username": user_data[4],
         "registered_date": user_data[6],
         "is_seller": user_data[7],
-        "is_client": user_data[8]
+        "is_client": user_data[8],
+        "telegram_username":user_data[9]
     }
     return user_dict
 

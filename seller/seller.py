@@ -1,97 +1,80 @@
-from typing import List
-
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import delete
+from fastapi import UploadFile,Body
+import aiofiles
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import insert, delete,func,update
 from sqlalchemy.future import select
-
 from auth.utils import verify_token
+from client.client import router_public
 from database import get_async_session
-from models.models import seller_projects, certificate, language, experience, occupation, projects_skills, \
-    project_files, seller, saved_client, user
-from .schemas import SellerProjectCreate, SellerProject, CertificateCreate, Certificate, LanguageCreate, Language, \
-    ExperienceCreate, Experience, OccupationCreate, Occupation, ProjectSkillCreate, ProjectSkill, ProjectFileCreate, \
-    ProjectFile, Seller
+from models.models import seller_projects, certificate, experience, occupation, \
+    project_files, seller, user
+from .schemas import SellerProjectCreate, SellerProject, Certificate, \
+    ExperienceCreate, Experience, \
+    ProjectFile,SellerUpdateSchema,Profil
+from models.models import skills, seller_skills,seller_occupation,occupation,saved_seller
+from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException
+from typing import List ,Dict
+from fastapi.responses import JSONResponse
+from models.models import gigs
+from fastapi import Form
+from typing import Optional
+from datetime import date
 
 seller_router = APIRouter(tags=['Seller API'])
 
-
-@seller_router.get("/seller/", response_model=Seller, summary="Get details of the current seller")
-async def get_seller(
-        token: dict = Depends(verify_token),
-        session: AsyncSession = Depends(get_async_session)
+@seller_router.put("/update/profil", response_model=dict, summary="Update seller profile")
+async def update_seller_profile(
+    description: Optional[str] = Form(None),
+    birth_date: Optional[date] = Form(None),
+    image_url: UploadFile = None,
+    cv_url: UploadFile = None,
+    token: dict = Depends(verify_token),
+    session: AsyncSession = Depends(get_async_session)
 ):
     if token is None:
         raise HTTPException(status_code=401, detail="Not registered")
 
     user_id = token.get('user_id')
+    
+    seller_query = select(seller.c.id).where(seller.c.user_id == user_id)
+    result = await session.execute(seller_query)
+    seller_id = result.scalar()
 
-    # Fetch seller details
-    seller_info_query = select(seller).where(seller.c.user_id == user_id)
-    seller_result = await session.execute(seller_info_query)
-    seller_data = seller_result.fetchone()
+    if seller_id is None:
+        raise HTTPException(status_code=404, detail=f"Seller not found for user_id {user_id}")
 
-    if not seller_data:
-        raise HTTPException(status_code=404, detail="Seller not found")
+    out_file1 = None
+    out_file2 = None
 
-    seller_id = seller_data[0]
+    if image_url is not None:
+        out_file1 = f'/{image_url.filename}'
+        async with aiofiles.open(f'image_file/{out_file1}', 'wb') as f:
+            content = await image_url.read()
+            await f.write(content)
 
-    # Fetch languages
-    result_languages = await session.execute(
-        select(language).where(language.c.seller_id == seller_id)
-    )
-    languages_data = result_languages.fetchall()
-    languages_list = [Language(id=lan.id, lan_name=lan.lan_name) for lan in languages_data]
+    if cv_url is not None:
+        out_file2 = f'/{cv_url.filename}'
+        async with aiofiles.open(f'cv_file/{out_file2}', 'wb') as f:
+            content = await cv_url.read()
+            await f.write(content)
 
-    # Fetch experiences
-    result_experiences = await session.execute(
-        select(experience).where(experience.c.seller_id == seller_id)
-    )
-    experiences_data = result_experiences.fetchall()
-    experiences_list = [Experience(
-        id=exp.id,
-        company_name=exp.company_name,
-        start_date=exp.start_date,
-        end_date=exp.end_date,
-        city=exp.city,
-        country=exp.country,
-        job_title=exp.job_title,
-        description=exp.description
-    ) for exp in experiences_data]
+    query = update(seller).where(seller.c.id == seller_id)
+    if out_file1 is not None:
+        query = query.values(image_url=out_file1)
+    if description is not None:
+        query = query.values(description=description)
+    if out_file2 is not None:
+        query = query.values(cv_url=out_file2)
+    if birth_date is not None:
+        query = query.values(birth_date=birth_date)
 
-    # Fetch occupations
-    result_occupations = await session.execute(
-        select(occupation).where(occupation.c.seller_id == seller_id)
-    )
-    occupations_data = result_occupations.fetchall()
-    occupations_list = [Occupation(id=occ.id, occup_name=occ.occup_name) for occ in occupations_data]
+    await session.execute(query)
+    await session.commit()
 
-    # Fetch certificates
-    result_certificates = await session.execute(
-        select(certificate).where(certificate.c.seller_id == seller_id)
-    )
-    certificates_data = result_certificates.fetchall()
-    certificates_list = [Certificate(id=cert.id, pdf_url=cert.pdf_url) for cert in certificates_data]
+    return {"message": "Seller profile updated successfully"}
 
-    # Assemble seller data without projects
-    seller_info = Seller(
-        id=seller_data.id,
-        user_id=seller_data.user_id,
-        image_url=seller_data.image_url,
-        description=seller_data.description,
-        cv_url=seller_data.cv_url,
-        birth_date=seller_data.birth_date,
-        active_gigs=seller_data.active_gigs,
-        languages=languages_list,
-        experiences=experiences_list,
-        occupations=occupations_list,
-        certificates=certificates_list
-    )
-
-    return seller_info
-
-
-@seller_router.post("/projects/", response_model=SellerProject, summary="Create a new project")
+@seller_router.post("/project/", summary="Create a new project")
 async def create_seller_project(
         project: SellerProjectCreate,
         token: dict = Depends(verify_token),
@@ -102,19 +85,46 @@ async def create_seller_project(
 
     user_id = token.get('user_id')
 
-    new_project = seller_projects.insert().values(
-        title=project.title,
-        category=project.category,
-        price=project.price,
-        delivery_days=project.delivery_days,
-        seller_id=user_id,
-        description=project.description,
-        status=project.status
+
+    seller_query = select(seller.c.id).where(seller.c.user_id == user_id)
+    result = await session.execute(seller_query)
+    seller_id = result.scalar()
+
+    if seller_id is None:
+     raise HTTPException(status_code=404, detail=f"Seller not found for user_id {user_id}")
+
+    existing_project_result=await session.execute(
+        select(seller_projects).where(
+            seller_projects.c.title==project.title,
+            seller_projects.c.price ==project.price,
+            seller_projects.c.delivery_days==project.delivery_days,
+            seller_projects.c.seller_id==seller_id,
+            seller_projects.c.description==project.description,
+            seller_projects.c.status==True
+
+        )
     )
-    result = await session.execute(new_project)
+
+
+    existing_project=existing_project_result.fetchone()
+    if existing_project:
+        raise HTTPException(status_code=400, detail="You have already created a project")
+
+
+
+    project_data = project.dict()
+    project_data['seller_id'] = seller_id
+
+
+    query = insert(seller_projects).values(**project_data)
+    result = await session.execute(query)
     await session.commit()
 
-    return {**project.dict(), "id": result.inserted_primary_key[0], "seller_id": user_id}
+    return JSONResponse(
+        status_code=201,
+        content={"message": "Project successfully added"}
+    )
+
 
 
 @seller_router.get("/projects/", response_model=List[SellerProject], summary="Get all projects by user")
@@ -127,8 +137,16 @@ async def read_seller_projects(
 
     user_id = token.get('user_id')
 
+    seller_query = select(seller.c.id).where(seller.c.user_id == user_id)
+    result = await session.execute(seller_query)
+    seller_id = result.scalar()
+    
+    if seller_id is None:
+        raise HTTPException(status_code=404, detail=f"Seller not found for user_id {user_id}")
+
+
     result = await session.execute(
-        select(seller_projects).where(seller_projects.c.seller_id == user_id)
+        select(seller_projects).where(seller_projects.c.seller_id == seller_id)
     )
     projects = result.fetchall()
 
@@ -137,36 +155,38 @@ async def read_seller_projects(
 
     project_list = []
     for project in projects:
-        project_id = project[0]  # Unpack the tuple to get the project id
+  
+        print(project)
+        project_id = project[0]  
 
+  
         project_files_result = await session.execute(
             select(project_files).where(project_files.c.seller_project_id == project_id)
         )
         project_files_data = project_files_result.fetchall()
 
-        project_skills_result = await session.execute(
-            select(projects_skills).where(projects_skills.c.seller_project_id == project_id)
-        )
-        project_skills_data = project_skills_result.fetchall()
+    
+       
+       
 
         project_dict = {
             "id": project[0],
             "title": project[1],
-            "category": project[2],
-            "price": project[3],
-            "delivery_days": project[4],
-            "seller_id": project[5],
-            "description": project[6],
-            "status": project[7],
+         
+            "price": project[2],
+            "delivery_days": project[3],
+            "seller_id": project[4],
+            "description": project[5],
+            "status": project[6],
             "files": [ProjectFile(id=file.id, file_url=file.file_url, seller_project_id=file.seller_project_id) for file
                       in project_files_data],
-            "skills": [ProjectSkill(id=skill.id, skill_name=skill.skill_name, seller_project_id=skill.seller_project_id)
-                       for skill in project_skills_data],
+           
         }
 
         project_list.append(SellerProject(**project_dict))
 
     return project_list
+
 
 
 @seller_router.delete("/projects/{project_id}/", summary="Delete a project by ID")
@@ -180,11 +200,19 @@ async def delete_seller_project(
 
     user_id = token.get('user_id')
 
-    # Check if the project exists and belongs to the user
+
+    seller_query = select(seller.c.id).where(seller.c.user_id == user_id)
+    result = await session.execute(seller_query)
+    seller_id = result.scalar()
+    
+    if seller_id is None:
+        raise HTTPException(status_code=404, detail=f"Seller not found for user_id {user_id}")
+
+  
     result = await session.execute(
         select(seller_projects).where(
             seller_projects.c.id == project_id,
-            seller_projects.c.seller_id == user_id
+            seller_projects.c.seller_id == seller_id
         )
     )
     project = result.scalars().first()
@@ -192,29 +220,30 @@ async def delete_seller_project(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found or not owned by the user")
 
-    # Delete associated project files
+  
     await session.execute(
         delete(project_files).where(project_files.c.seller_project_id == project_id)
     )
 
-    # Delete associated project skills
-    await session.execute(
-        delete(projects_skills).where(projects_skills.c.seller_project_id == project_id)
-    )
 
-    # Delete the project itself
+
     await session.execute(
         delete(seller_projects).where(seller_projects.c.id == project_id)
     )
 
     await session.commit()
 
-    return {"detail": "Project deleted successfully"}
+
+    return JSONResponse(
+        status_code=200,
+        content={"message": "Project deleted successfully"}
+    )
 
 
-@seller_router.post("/certificates/", response_model=Certificate, summary="Add a new certificate")
+
+@seller_router.post("/certificate/", summary="Add a new certificate")
 async def add_certificate(
-        cert: CertificateCreate,
+        file: UploadFile,
         token: dict = Depends(verify_token),
         session: AsyncSession = Depends(get_async_session)
 ):
@@ -223,17 +252,73 @@ async def add_certificate(
 
     user_id = token.get('user_id')
 
+    seller_query = select(seller.c.id).where(seller.c.user_id == user_id)
+    result = await session.execute(seller_query)
+    seller_id = result.scalar()
+
+    if seller_id is None:
+     raise HTTPException(status_code=404, detail=f"Seller not found for user_id {user_id}")
+    
+    
+    cert_count_query = select(func.count(certificate.c.id)).where(certificate.c.seller_id == seller_id)
+    result = await session.execute(cert_count_query)
+    cert_count = result.scalar()
+
+    if cert_count >= 3:
+        raise HTTPException(status_code=403, detail="Cannot add more than 5 certificates")
+
+
+
+    
+    if file is not None:
+        out_file = f'/{file.filename}'
+        async with aiofiles.open(f'certificate_file/{out_file}', 'wb') as f:
+            content = await file.read()
+            await f.write(content)
+
     new_cert = certificate.insert().values(
-        pdf_url=cert.pdf_url,
-        seller_id=user_id
+        pdf_url=out_file,
+        seller_id=seller_id
     )
     result = await session.execute(new_cert)
     await session.commit()
 
-    return {**cert.dict(), "id": result.inserted_primary_key[0], "seller_id": user_id}
+    return JSONResponse(
+        status_code=201,
+        content={"message":" Certificate successfully added to the seller"}
+    )
 
 
-# DELETE Certificate by ID
+
+
+@seller_router.get("/certificates/", response_model=List[Certificate], summary="Get all certificates by user")
+async def get_certificates(
+        token: dict = Depends(verify_token),
+        session: AsyncSession = Depends(get_async_session)
+):
+    if token is None:
+        raise HTTPException(status_code=401, detail="Not registered")
+
+    user_id = token.get('user_id')
+
+    seller_query = select(seller.c.id).where(seller.c.user_id == user_id)
+    result = await session.execute(seller_query)
+    seller_id = result.scalar()
+
+    if seller_id is None:
+     raise HTTPException(status_code=404, detail=f"Seller not found for user_id {user_id}")
+    
+    result = await session.execute(
+        select(certificate).where(certificate.c.seller_id == seller_id)
+    )
+    certificates = result.fetchall()
+
+
+
+    return certificates
+
+
+
 @seller_router.delete("/certificates/{cert_id}/", summary="Delete a certificate by ID")
 async def delete_certificate(
         cert_id: int,
@@ -245,182 +330,34 @@ async def delete_certificate(
 
     user_id = token.get('user_id')
 
-    # Check if the certificate exists and belongs to the user
+    seller_query = select(seller.c.id).where(seller.c.user_id == user_id)
+    result = await session.execute(seller_query)
+    seller_id = result.scalar()
+
+    if seller_id is None:
+     raise HTTPException(status_code=404, detail=f"Seller not found for user_id {user_id}")
+  
     result = await session.execute(select(certificate).where(
-        (certificate.c.id == cert_id) & (certificate.c.seller_id == user_id)
+        (certificate.c.id == cert_id) & (certificate.c.seller_id == seller_id)
     ))
+
     cert = result.scalar_one_or_none()
 
     if not cert:
         raise HTTPException(status_code=404, detail="Certificate not found")
 
-    # Delete the certificate
+
     await session.execute(certificate.delete().where(certificate.c.id == cert_id))
     await session.commit()
 
-    return {"detail": "Certificate deleted successfully"}
-
-
-# GET all certificates
-@seller_router.get("/certificates/", response_model=List[Certificate], summary="Get all certificates by user")
-async def get_certificates(
-        token: dict = Depends(verify_token),
-        session: AsyncSession = Depends(get_async_session)
-):
-    if token is None:
-        raise HTTPException(status_code=401, detail="Not registered")
-
-    user_id = token.get('user_id')
-
-    result = await session.execute(
-        select(certificate).where(certificate.c.seller_id == user_id)
+    return JSONResponse(
+        status_code=200,
+        content={"message": "Certificate deleted successfully"}
     )
-    certificates = result.fetchall()
-
-    if not certificates:
-        raise HTTPException(status_code=404, detail="No certificates found for this user")
-
-    certificate_list = []
-    for cert in certificates:
-        cert_dict = {
-            "id": cert[0],
-            "pdf_url": cert[1],
-            "seller_id": cert[2]
-        }
-        certificate_list.append(Certificate(**cert_dict))
-
-    return certificate_list
 
 
-# GET Certificate by ID
-# @seller_router.get("/certificates/{cert_id}/", response_model=Certificate, summary="Get a certificate by ID")
-# async def get_certificate(
-#         cert_id: int,
-#         token: dict = Depends(verify_token),
-#         session: AsyncSession = Depends(get_async_session)
-# ):
-#     if token is None:
-#         raise HTTPException(status_code=401, detail="Not registered")
-#
-#     user_id = token.get('user_id')
-#
-#     # Retrieve the certificate by ID and user ID
-#     result = await session.execute(select(certificate).where(
-#         (certificate.c.id == cert_id) & (certificate.c.seller_id == user_id)
-#     ))
-#     cert = result.scalar_one_or_none()
-#
-#     if not cert:
-#         raise HTTPException(status_code=404, detail="Certificate not found")
-#
-#     return cert
 
-
-@seller_router.post("/languages/", response_model=Language, summary="Add a new language")
-async def add_language(
-        lang: LanguageCreate,
-        token: dict = Depends(verify_token),
-        session: AsyncSession = Depends(get_async_session)
-):
-    if token is None:
-        raise HTTPException(status_code=401, detail="Not registered")
-
-    user_id = token.get('user_id')
-
-    new_lang = language.insert().values(
-        lan_name=lang.lan_name,
-        seller_id=user_id
-    )
-    result = await session.execute(new_lang)
-    await session.commit()
-
-    return {**lang.dict(), "id": result.inserted_primary_key[0], "seller_id": user_id}
-
-
-# DELETE Language by ID
-@seller_router.delete("/languages/{lang_id}/", summary="Delete a language by ID")
-async def delete_language(
-        lang_id: int,
-        token: dict = Depends(verify_token),
-        session: AsyncSession = Depends(get_async_session)
-):
-    if token is None:
-        raise HTTPException(status_code=401, detail="Not registered")
-
-    user_id = token.get('user_id')
-
-    # Check if the language exists and belongs to the user
-    result = await session.execute(select(language).where(
-        (language.c.id == lang_id) & (language.c.seller_id == user_id)
-    ))
-    lang = result.scalar_one_or_none()
-
-    if not lang:
-        raise HTTPException(status_code=404, detail="Language not found")
-
-    # Delete the language
-    await session.execute(language.delete().where(language.c.id == lang_id))
-    await session.commit()
-
-    return {"detail": "Language deleted successfully"}
-
-
-# GET all languages
-@seller_router.get("/languages/", response_model=List[Language], summary="Get all languages by user")
-async def get_languages(
-        token: dict = Depends(verify_token),
-        session: AsyncSession = Depends(get_async_session)
-):
-    if token is None:
-        raise HTTPException(status_code=401, detail="Not registered")
-
-    user_id = token.get('user_id')
-
-    result = await session.execute(
-        select(language).where(language.c.seller_id == user_id)
-    )
-    languages = result.fetchall()
-
-    if not languages:
-        raise HTTPException(status_code=404, detail="No languages found for this user")
-
-    language_list = []
-    for lang in languages:
-        lang_dict = {
-            "id": lang[0],
-            "lan_name": lang[1],
-            "seller_id": lang[2]
-        }
-        language_list.append(Language(**lang_dict))
-
-    return language_list
-
-
-# GET Language by ID
-# @seller_router.get("/languages/{lang_id}/", response_model=Language, summary="Get a language by ID")
-# async def get_language(
-#         lang_id: int,
-#         token: dict = Depends(verify_token),
-#         session: AsyncSession = Depends(get_async_session)
-# ):
-#     if token is None:
-#         raise HTTPException(status_code=401, detail="Not registered")
-#
-#     user_id = token.get('user_id')
-#
-#     # Retrieve the language by ID and user ID
-#     result = await session.execute(select(language).where(
-#         (language.c.id == lang_id) & (language.c.seller_id == user_id)
-#     ))
-#     lang = result.scalar_one_or_none()
-#
-#     if not lang:
-#         raise HTTPException(status_code=404, detail="Language not found")
-#
-#     return lang
-
-
-@seller_router.post("/experiences/", response_model=Experience, summary="Add a new experience")
+@seller_router.post("/experience/",  summary="Add a new experience")
 async def add_experience(
         exp: ExperienceCreate,
         token: dict = Depends(verify_token),
@@ -430,12 +367,47 @@ async def add_experience(
         raise HTTPException(status_code=401, detail="Not registered")
 
     user_id = token.get('user_id')
+  
+
+    seller_query = select(seller.c.id).where(seller.c.user_id == user_id)
+    result = await session.execute(seller_query)
+    seller_id = result.scalar()
+    if seller_id is None:
+     raise HTTPException(status_code=404, detail=f"Seller not found for user_id {user_id}")
+
+     
+    exp_count_query = select(func.count()).where(experience.c.seller_id == seller_id)
+    result = await session.execute(exp_count_query)
+    exp_count = result.scalar()
+
+    
+    if exp_count >=5:
+        raise HTTPException(status_code=403, detail="Cannot add more than 5 experiences")
+
+    existing_exp_result=await session.execute(
+        select(experience).where(
+            experience.c.company_name == exp.company_name,
+            experience.c.start_date == exp.start_date,
+            experience.c.end_date == exp.end_date,
+            experience.c.seller_id == seller_id,
+            experience.c.city == exp.city,
+            experience.c.country == exp.country,
+            experience.c.job_title == exp.job_title,
+            experience.c.description == exp.description
+
+        )
+    )
+
+
+    existing_exp=existing_exp_result.fetchone()
+    if existing_exp:
+        raise HTTPException(status_code=400, detail="You have already created a experience")
 
     new_exp = experience.insert().values(
         company_name=exp.company_name,
         start_date=exp.start_date,
         end_date=exp.end_date,
-        seller_id=user_id,
+        seller_id=seller_id,
         city=exp.city,
         country=exp.country,
         job_title=exp.job_title,
@@ -444,10 +416,14 @@ async def add_experience(
     result = await session.execute(new_exp)
     await session.commit()
 
-    return {**exp.dict(), "id": result.inserted_primary_key[0], "seller_id": user_id}
+
+    return JSONResponse(
+        status_code=201,
+        content={"message": "Experience successfully added to the seller"}
+    )
 
 
-# GET all experiences
+
 @seller_router.get("/experiences/", response_model=List[Experience], summary="Get all experiences by user")
 async def get_experiences(
         token: dict = Depends(verify_token),
@@ -457,9 +433,17 @@ async def get_experiences(
         raise HTTPException(status_code=401, detail="Not registered")
 
     user_id = token.get('user_id')
+  
+
+    seller_query = select(seller.c.id).where(seller.c.user_id == user_id)
+    result = await session.execute(seller_query)
+    seller_id = result.scalar()
+    if seller_id is None:
+     raise HTTPException(status_code=404, detail=f"Seller not found for user_id {user_id}")
+
 
     result = await session.execute(
-        select(experience).where(experience.c.seller_id == user_id)
+        select(experience).where(experience.c.seller_id == seller_id)
     )
     experiences = result.fetchall()
 
@@ -484,7 +468,7 @@ async def get_experiences(
     return experience_list
 
 
-# DELETE Experience by ID
+
 @seller_router.delete("/experiences/{exp_id}/", summary="Delete an experience by ID")
 async def delete_experience(
         exp_id: int,
@@ -496,7 +480,6 @@ async def delete_experience(
 
     user_id = token.get('user_id')
 
-    # Check if the experience exists and belongs to the user
     result = await session.execute(select(experience).where(
         (experience.c.id == exp_id) & (experience.c.seller_id == user_id)
     ))
@@ -505,15 +488,19 @@ async def delete_experience(
     if not exp:
         raise HTTPException(status_code=404, detail="Experience not found")
 
-    # Delete the experience
+
     await session.execute(experience.delete().where(experience.c.id == exp_id))
     await session.commit()
 
-    return {"detail": "Experience deleted successfully"}
+
+    return JSONResponse(
+        status_code=200,
+        content={"message": "Experience deleted successfully"}
+    )
 
 
-# GET Experience by ID
-@seller_router.get("/experiences/{exp_id}/", response_model=Experience, summary="Get an experience by ID")
+
+@seller_router.get("/experiences/{exp_id}/", response_model=List[Experience], summary="Get an experience by ID")
 async def get_experience(
         exp_id: int,
         token: dict = Depends(verify_token),
@@ -524,196 +511,32 @@ async def get_experience(
 
     user_id = token.get('user_id')
 
-    # Retrieve the experience by ID and user ID
+    seller_query = select(seller.c.id).where(seller.c.user_id == user_id)
+    result = await session.execute(seller_query)
+    seller_id = result.scalar()
+    
+    if seller_id is None:
+        raise HTTPException(status_code=404, detail=f"Seller not found for user_id {user_id}")
+
+ 
     result = await session.execute(select(experience).where(
-        (experience.c.id == exp_id) & (experience.c.seller_id == user_id)
+        (experience.c.id == exp_id) & (experience.c.seller_id == seller_id)
     ))
-    exp = result.scalar_one_or_none()
+    exp = result.fetchall()  
 
     if not exp:
         raise HTTPException(status_code=404, detail="Experience not found")
 
+ 
     return exp
 
 
-@seller_router.post("/occupations/", response_model=Occupation, summary="Add a new occupation")
-async def add_occupation(
-        occ: OccupationCreate,
-        token: dict = Depends(verify_token),
-        session: AsyncSession = Depends(get_async_session)
-):
-    if token is None:
-        raise HTTPException(status_code=401, detail="Not registered")
 
-    user_id = token.get('user_id')
-
-    new_occ = occupation.insert().values(
-        occup_name=occ.occup_name,
-        seller_id=user_id
-    )
-    result = await session.execute(new_occ)
-    await session.commit()
-
-    return {**occ.dict(), "id": result.inserted_primary_key[0], "seller_id": user_id}
-
-
-# DELETE Occupation by ID
-@seller_router.delete("/occupations/{occ_id}/", summary="Delete an occupation by ID")
-async def delete_occupation(
-        occ_id: int,
-        token: dict = Depends(verify_token),
-        session: AsyncSession = Depends(get_async_session)
-):
-    if token is None:
-        raise HTTPException(status_code=401, detail="Not registered")
-
-    user_id = token.get('user_id')
-
-    # Check if the occupation exists and belongs to the user
-    result = await session.execute(select(occupation).where(
-        (occupation.c.id == occ_id) & (occupation.c.seller_id == user_id)
-    ))
-    occ = result.scalar_one_or_none()
-
-    if not occ:
-        raise HTTPException(status_code=404, detail="Occupation not found")
-
-    # Delete the occupation
-    await session.execute(occupation.delete().where(occupation.c.id == occ_id))
-    await session.commit()
-
-    return {"detail": "Occupation deleted successfully"}
-
-
-# GET all occupations
-@seller_router.get("/occupations/", response_model=List[Occupation], summary="Get all occupations by user")
-async def get_occupations(
-        token: dict = Depends(verify_token),
-        session: AsyncSession = Depends(get_async_session)
-):
-    if token is None:
-        raise HTTPException(status_code=401, detail="Not registered")
-
-    user_id = token.get('user_id')
-
-    result = await session.execute(
-        select(occupation).where(occupation.c.seller_id == user_id)
-    )
-    occupations = result.fetchall()
-
-    if not occupations:
-        raise HTTPException(status_code=404, detail="No occupations found for this user")
-
-    occupation_list = []
-    for occ in occupations:
-        occ_dict = {
-            "id": occ[0],
-            "occup_name": occ[1],
-            "seller_id": occ[2]
-        }
-        occupation_list.append(Occupation(**occ_dict))
-
-    return occupation_list
-
-
-# GET Occupation by ID
-@seller_router.get("/occupations/{occ_id}/", response_model=Occupation, summary="Get an occupation by ID")
-async def get_occupation(
-        occ_id: int,
-        token: dict = Depends(verify_token),
-        session: AsyncSession = Depends(get_async_session)
-):
-    if token is None:
-        raise HTTPException(status_code=401, detail="Not registered")
-
-    user_id = token.get('user_id')
-
-    # Retrieve the occupation by ID and user ID
-    result = await session.execute(select(occupation).where(
-        (occupation.c.id == occ_id) & (occupation.c.seller_id == user_id)
-    ))
-    occ = result.scalar_one_or_none()
-
-    if not occ:
-        raise HTTPException(status_code=404, detail="Occupation not found")
-
-    return occ
-
-
-@seller_router.post("/project-skills/", response_model=ProjectSkill, summary="Add a new project skill")
-async def add_project_skills(
-        proj_skill: ProjectSkillCreate,
-        token: dict = Depends(verify_token),
-        session: AsyncSession = Depends(get_async_session)
-):
-    if token is None:
-        raise HTTPException(status_code=401, detail="Not registered")
-
-    user_id = token.get('user_id')
-
-    new_proj_skill = projects_skills.insert().values(
-        skill_name=proj_skill.skill_name,
-        seller_project_id=proj_skill.seller_project_id
-    )
-    result = await session.execute(new_proj_skill)
-    await session.commit()
-
-    return {**proj_skill.dict(), "id": result.inserted_primary_key[0]}
-
-
-# DELETE Project Skill by ID
-@seller_router.delete("/project-skills/{proj_skill_id}/", summary="Delete a project skill by ID")
-async def delete_project_skill(
-        proj_skill_id: int,
-        token: dict = Depends(verify_token),
-        session: AsyncSession = Depends(get_async_session)
-):
-    if token is None:
-        raise HTTPException(status_code=401, detail="Not registered")
-
-    user_id = token.get('user_id')
-
-    # Check if the project skill exists and belongs to the user
-    result = await session.execute(select(projects_skills).where(
-        (projects_skills.c.id == proj_skill_id)
-    ))
-    proj_skill = result.scalar_one_or_none()
-
-    if not proj_skill:
-        raise HTTPException(status_code=404, detail="Project skill not found")
-
-    # Delete the project skill
-    await session.execute(projects_skills.delete().where(projects_skills.c.id == proj_skill_id))
-    await session.commit()
-
-    return {"detail": "Project skill deleted successfully"}
-
-
-# GET Project Skill by ID
-@seller_router.get("/project-skills/{proj_skill_id}/", response_model=ProjectSkill, summary="Get a project skill by ID")
-async def get_project_skill(
-        proj_skill_id: int,
-        token: dict = Depends(verify_token),
-        session: AsyncSession = Depends(get_async_session)
-):
-    if token is None:
-        raise HTTPException(status_code=401, detail="Not registered")
-
-    # Retrieve the project skill by ID
-    result = await session.execute(select(projects_skills).where(
-        (projects_skills.c.id == proj_skill_id)
-    ))
-    proj_skill = result.scalar_one_or_none()
-
-    if not proj_skill:
-        raise HTTPException(status_code=404, detail="Project skill not found")
-
-    return proj_skill
-
-
-@seller_router.post("/project-files/", response_model=ProjectFile, summary="Add a new project file")
+@seller_router.post("/project-file/", summary="Add a new project file")
 async def add_project_files(
-        proj_file: ProjectFileCreate,
+        file: UploadFile,
+        seller_project_id: int,
+
         token: dict = Depends(verify_token),
         session: AsyncSession = Depends(get_async_session)
 ):
@@ -722,17 +545,89 @@ async def add_project_files(
 
     user_id = token.get('user_id')
 
-    new_proj_file = project_files.insert().values(
-        file_url=proj_file.file_url,
-        seller_project_id=proj_file.seller_project_id
+   
+    seller_query = select(seller.c.id).where(seller.c.user_id == user_id)
+    result = await session.execute(seller_query)
+    seller_id = result.scalar()
+    
+    if seller_id is None:
+        raise HTTPException(status_code=404, detail=f"Seller not found for user_id {user_id}")
+
+   
+    project_query = select(seller_projects.c.id).where(
+        (seller_projects.c.id == seller_project_id) &
+        (seller_projects.c.seller_id == seller_id)
     )
-    result = await session.execute(new_proj_file)
+    project_result = await session.execute(project_query)
+    project = project_result.scalar()
+
+    if project is None:
+        raise HTTPException(status_code=403, detail="You are not allowed to add files to this project")
+    
+
+    if file is not None:
+        out_file = f'/{file.filename}'
+        async with aiofiles.open(f'project_file/{out_file}', 'wb') as f:
+            content = await file.read()
+            await f.write(content)
+  
+    new_proj_file = project_files.insert().values(
+        file_url=out_file,
+        seller_project_id=seller_project_id
+    )
+    await session.execute(new_proj_file)
     await session.commit()
 
-    return {**proj_file.dict(), "id": result.inserted_primary_key[0]}
+    return JSONResponse(
+        status_code=201,
+        content={"message": "File successfully added to the project"}
+    )
 
 
-# DELETE Project File by ID
+
+@seller_router.get("/project-files/", summary="Get all project files for a seller")
+async def get_project_files(
+        token: dict = Depends(verify_token),
+        session: AsyncSession = Depends(get_async_session)
+):
+    if token is None:
+        raise HTTPException(status_code=401, detail="Not registered")
+
+    user_id = token.get('user_id')
+
+    # Seller ID ni olish
+    seller_query = select(seller.c.id).where(seller.c.user_id == user_id)
+    result = await session.execute(seller_query)
+    seller_id = result.scalar()
+
+    if seller_id is None:
+        raise HTTPException(status_code=404, detail="Seller not found")
+
+
+    files_query = select(project_files).select_from(
+        project_files.join(seller_projects, project_files.c.seller_project_id == seller_projects.c.id)
+    ).where(
+        seller_projects.c.seller_id == seller_id
+    )
+
+    result = await session.execute(files_query)
+    files = result.fetchall()
+
+    if not files:
+        raise HTTPException(status_code=404, detail="No project files found")
+
+    project_files_list = []
+    for file in files:
+        project_files_list.append({
+            "id": file.id,
+            "file_url": file.file_url,
+            "seller_project_id": file.seller_project_id
+        })
+
+    return project_files_list
+
+
+
 @seller_router.delete("/project-files/{proj_file_id}/", summary="Delete a project file by ID")
 async def delete_project_file(
         proj_file_id: int,
@@ -744,7 +639,7 @@ async def delete_project_file(
 
     user_id = token.get('user_id')
 
-    # Check if the project file exists and belongs to the user
+
     result = await session.execute(select(project_files).where(
         (project_files.c.id == proj_file_id)
     ))
@@ -753,163 +648,600 @@ async def delete_project_file(
     if not proj_file:
         raise HTTPException(status_code=404, detail="Project file not found")
 
-    # Delete the project file
+   
     await session.execute(project_files.delete().where(project_files.c.id == proj_file_id))
     await session.commit()
 
-    return {"detail": "Project file deleted successfully"}
+    return JSONResponse(
+        status_code=200,
+        content={"message": "Project file deleted successfully"}
+    )
 
 
-# GET Project File by ID
-@seller_router.get("/project-files/{proj_file_id}/", response_model=ProjectFile, summary="Get a project file by ID")
-async def get_project_file(
-        proj_file_id: int,
-        token: dict = Depends(verify_token),
-        session: AsyncSession = Depends(get_async_session)
+
+@seller_router.post("/seller/skill/", summary="Add multiple skills to seller profile")
+async def add_skills_to_seller(
+    skills_ids: List[int],  
+    token: dict = Depends(verify_token),
+    session: AsyncSession = Depends(get_async_session)
 ):
     if token is None:
         raise HTTPException(status_code=401, detail="Not registered")
+    user_id = token.get('user_id')
 
-    # Retrieve the project file by ID
-    result = await session.execute(select(project_files).where(
-        (project_files.c.id == proj_file_id)
+    seller_result = await session.execute(select(seller.c.id).where(seller.c.user_id == user_id))
+    seller_id = seller_result.scalar()
+    if not seller_id:
+        raise HTTPException(status_code=404, detail=f"Seller not found for user_id {user_id}")
+
+    
+    skill_result = await session.execute(select(skills.c.id).where(skills.c.id.in_(skills_ids)))
+    valid_skill_ids = set(skill_result.scalars().all())
+    invalid_skill_ids = set(skills_ids) - valid_skill_ids
+    if invalid_skill_ids:
+        raise HTTPException(status_code=404, detail=f"Skills with IDs {list(invalid_skill_ids)} not found")
+
+    existing_skills_result = await session.execute(select(seller_skills.c.skill_id).where(seller_skills.c.seller_id == seller_id))
+    existing_skill_ids = set(existing_skills_result.scalars().all())
+
+    new_skill_ids = valid_skill_ids - existing_skill_ids
+    max_skills_limit = 3  
+    if len(existing_skill_ids) + len(new_skill_ids) > max_skills_limit:
+        raise HTTPException(status_code=400, detail=f"Cannot add more than {max_skills_limit} skills")
+
+
+    if new_skill_ids:
+        values_to_insert = [{"seller_id": seller_id, "skill_id": skill_id} for skill_id in new_skill_ids]
+        insert_query = insert(seller_skills).values(values_to_insert)
+        await session.execute(insert_query)
+        await session.commit()
+
+
+    return JSONResponse(
+        status_code=201,
+        content={"message": "Skills added to seller profile successfully"}
+    )
+
+
+
+@seller_router.get("/seller/skills/", summary="Occupations")
+async def get_seller_profile(
+    token: dict = Depends(verify_token),
+    session: AsyncSession = Depends(get_async_session)
+) -> Dict:
+    if token is None:
+        raise HTTPException(status_code=401, detail="Not registered")
+    user_id = token.get('user_id')
+
+    seller_result = await session.execute(select(seller.c.id).where(seller.c.user_id == user_id))
+    seller_id = seller_result.scalar()
+    if not seller_id:
+        raise HTTPException(status_code=404, detail=f"Seller not found for user_id {user_id}")
+  
+    seller_query = select(seller).where(seller.c.id == seller_id)
+    seller_result = await session.execute(seller_query)
+    seller_data = seller_result.fetchone()
+
+    if not seller_data:
+        raise HTTPException(status_code=404, detail=f"Seller not found with id {seller_id}")
+
+    skills_query = select(skills).join(seller_skills).where(seller_skills.c.seller_id == seller_id)
+    skills_result = await session.execute(skills_query)
+    skills_list = [{"id": skill.id, "skill_name": skill.skill_name} for skill in skills_result.fetchall()]
+
+    return {
+        "skills":skills_list
+    }
+
+
+
+@seller_router.delete("/seller/skill/{skill_id}", summary="Remove a skill from seller profile")
+async def delete_skill_from_seller(
+    skill_id: int,
+    token: dict = Depends(verify_token),
+    session: AsyncSession = Depends(get_async_session)
+):
+    if token is None:
+        raise HTTPException(status_code=401, detail="Not registered")
+    user_id = token.get('user_id')
+
+  
+    seller_result = await session.execute(select(seller.c.id).where(seller.c.user_id == user_id))
+    seller_id = seller_result.scalar()
+    if not seller_id:
+        raise HTTPException(status_code=404, detail=f"Seller not found for user_id {user_id}")
+
+    skill_result = await session.execute(select(skills.c.id).where(skills.c.id == skill_id))
+    if skill_result.scalar() is None:
+        raise HTTPException(status_code=404, detail=f"Skill with ID {skill_id} not found")
+
+    existing_skill_result = await session.execute(select(seller_skills.c.skill_id).where(
+        seller_skills.c.seller_id == seller_id,
+        seller_skills.c.skill_id == skill_id
     ))
-    proj_file = result.scalar_one_or_none()
-
-    if not proj_file:
-        raise HTTPException(status_code=404, detail="Project file not found")
-
-    return proj_file
+    if existing_skill_result.scalar() is None:
+        raise HTTPException(status_code=404, detail="Skill not found in seller profile")
 
 
-@seller_router.post("/save_client/", summary="Save a client for the seller")
+    delete_query = delete(seller_skills).where(
+        seller_skills.c.seller_id == seller_id,
+        seller_skills.c.skill_id == skill_id
+    )
+    await session.execute(delete_query)
+    await session.commit()
+
+
+    return JSONResponse(
+        status_code=200,
+        content={"message": "Skill removed from seller profile successfully"}
+    )
+
+
+
+@seller_router.post("/seller/occupation/", summary="Add multiple occupations to seller profile")
+async def add_occupations_to_seller(
+    occupation_ids: List[int],  
+    token: dict = Depends(verify_token),
+    session: AsyncSession = Depends(get_async_session)
+):
+    if token is None:
+        raise HTTPException(status_code=401, detail="Not registered")
+    user_id = token.get('user_id')
+
+    seller_result = await session.execute(select(seller.c.id).where(seller.c.user_id == user_id))
+    seller_id = seller_result.scalar()
+    if not seller_id:
+        raise HTTPException(status_code=404, detail=f"Seller not found for user_id {user_id}")
+
+
+    occupation_result = await session.execute(select(occupation.c.id).where(occupation.c.id.in_(occupation_ids)))
+    valid_occupation_ids = set(occupation_result.scalars().all())
+    invalid_occupation_ids = set(occupation_ids) - valid_occupation_ids
+    if invalid_occupation_ids:
+        raise HTTPException(status_code=404, detail=f"Occupations with IDs {list(invalid_occupation_ids)} not found")
+
+
+    existing_occupations_result = await session.execute(select(seller_occupation.c.occupation_id).where(seller_occupation.c.seller_id == seller_id))
+    existing_occupation_ids = set(existing_occupations_result.scalars().all())
+
+    new_occupation_ids = valid_occupation_ids - existing_occupation_ids
+    max_occupations_limit = 5  
+    if len(existing_occupation_ids) + len(new_occupation_ids) > max_occupations_limit:
+        raise HTTPException(status_code=400, detail=f"Cannot add more than {max_occupations_limit} occupations")
+
+   
+    if new_occupation_ids:
+        values_to_insert = [{"seller_id": seller_id, "occupation_id": occ_id} for occ_id in new_occupation_ids]
+        insert_query = insert(seller_occupation).values(values_to_insert)
+        await session.execute(insert_query)
+        await session.commit()
+
+    return JSONResponse(
+        status_code=201,
+        content={"message": "Occupations added to seller profile successfully"}
+    )
+
+
+
+@seller_router.get("/seller/occupations/", summary="Occupations")
+async def get_seller_profile(
+    token: dict = Depends(verify_token),
+    session: AsyncSession = Depends(get_async_session)
+) -> Dict:
+    if token is None:
+        raise HTTPException(status_code=401, detail="Not registered")
+    user_id = token.get('user_id')
+
+    seller_result = await session.execute(select(seller.c.id).where(seller.c.user_id == user_id))
+    seller_id = seller_result.scalar()
+    if not seller_id:
+        raise HTTPException(status_code=404, detail=f"Seller not found for user_id {user_id}")
+  
+    seller_query = select(seller).where(seller.c.id == seller_id)
+    seller_result = await session.execute(seller_query)
+    seller_data = seller_result.fetchone()
+
+    if not seller_data:
+        raise HTTPException(status_code=404, detail=f"Seller not found with id {seller_id}")
+
+    occupations_query = select(occupation).join(seller_occupation).where(seller_occupation.c.seller_id == seller_id)
+    occupations_result = await session.execute(occupations_query)
+    occupations_list = [{"id": occ.id, "occup_name": occ.occup_name} for occ in occupations_result.fetchall()]
+
+    return {
+        "occupaitions":occupations_list
+    }
+
+
+
+@seller_router.delete("/seller/occupation/{occupation_id}", summary="Remove an occupation from seller profile")
+async def delete_occupation_from_seller(
+    occupation_id: int,
+    token: dict = Depends(verify_token),
+    session: AsyncSession = Depends(get_async_session)
+):
+    if token is None:
+        raise HTTPException(status_code=401, detail="Not registered")
+    user_id = token.get('user_id')
+
+
+    seller_result = await session.execute(select(seller.c.id).where(seller.c.user_id == user_id))
+    seller_id = seller_result.scalar()
+    if not seller_id:
+        raise HTTPException(status_code=404, detail=f"Seller not found for user_id {user_id}")
+
+  
+    occupation_result = await session.execute(select(occupation.c.id).where(occupation.c.id == occupation_id))
+    if occupation_result.scalar() is None:
+        raise HTTPException(status_code=404, detail=f"Occupation with ID {occupation_id} not found")
+
+
+    existing_occupation_result = await session.execute(select(seller_occupation.c.occupation_id).where(
+        seller_occupation.c.seller_id == seller_id,
+        seller_occupation.c.occupation_id == occupation_id
+    ))
+    if existing_occupation_result.scalar() is None:
+        raise HTTPException(status_code=404, detail="Occupation not found in seller profile")
+
+
+    delete_query = delete(seller_occupation).where(
+        seller_occupation.c.seller_id == seller_id,
+        seller_occupation.c.occupation_id == occupation_id
+    )
+    await session.execute(delete_query)
+    await session.commit()
+
+
+    return JSONResponse(
+        status_code=200,
+        content={"message": "Occupation removed from seller profile successfully"}
+    )
+
+
+
+@seller_router.get("/seller/profile/", summary="Get seller's profile including skills, certificates, experience, and seller details")
+async def get_seller_profile(
+    token: dict = Depends(verify_token),
+    session: AsyncSession = Depends(get_async_session)
+) -> Dict:
+    if token is None:
+        raise HTTPException(status_code=401, detail="Not registered")
+    user_id = token.get('user_id')
+
+    seller_result = await session.execute(select(seller.c.id).where(seller.c.user_id == user_id))
+    seller_id = seller_result.scalar()
+    if not seller_id:
+        raise HTTPException(status_code=404, detail=f"Seller not found for user_id {user_id}")
+  
+    seller_query = select(seller).where(seller.c.id == seller_id)
+    seller_result = await session.execute(seller_query)
+    seller_data = seller_result.fetchone()
+
+    if not seller_data:
+        raise HTTPException(status_code=404, detail=f"Seller not found with id {seller_id}")
+
+    seller_info = {
+        "id": seller_data.id,
+        "user_id": seller_data.user_id,
+        "image_url": seller_data.image_url,
+        "description": seller_data.description,
+        "cv_url": seller_data.cv_url,
+        "birth_date": seller_data.birth_date
+    }
+
+
+    skills_query = select(skills).join(seller_skills).where(seller_skills.c.seller_id == seller_id)
+    skills_result = await session.execute(skills_query)
+    skills_list = [{"id": skill.id, "skill_name": skill.skill_name} for skill in skills_result.fetchall()]
+
+
+    experience_query = select(experience).where(experience.c.seller_id == seller_id)
+    experience_result = await session.execute(experience_query)
+    experience_list = [{
+        "id": exp.id,
+        "company_name": exp.company_name,
+        "start_date": exp.start_date,
+        "end_date": exp.end_date,
+        "city": exp.city,
+        "country": exp.country,
+        "job_title": exp.job_title,
+        "description": exp.description
+    } for exp in experience_result.fetchall()]
+
+
+    certificates_query = select(certificate).where(certificate.c.seller_id == seller_id)
+    certificates_result = await session.execute(certificates_query)
+    certificates_list = [{"id": cert.id, "pdf_url": cert.pdf_url} for cert in certificates_result.fetchall()]
+
+    occupations_query = select(occupation).join(seller_occupation).where(seller_occupation.c.seller_id == seller_id)
+    occupations_result = await session.execute(occupations_query)
+    occupations_list = [{"id": occ.id, "occup_name": occ.occup_name} for occ in occupations_result.fetchall()]
+
+
+    return {
+        "seller": seller_info,
+        "skills": skills_list,
+        "experience": experience_list,
+        "certificates": certificates_list,
+        "occupations":occupations_list
+    }
+
+
+
+
+@seller_router.post('/saved_clients', summary="Save a Client")
 async def save_client(
-        client_id: int,
-        token: dict = Depends(verify_token),
-        session: AsyncSession = Depends(get_async_session)
+    client_id: int, 
+    token: dict = Depends(verify_token),
+    session: AsyncSession = Depends(get_async_session)
 ):
     if token is None:
         raise HTTPException(status_code=401, detail="Not registered")
+    
+    user_id = token.get('user_id')
 
-    # Get current user_id from token
-    current_user_id = token.get('user_id')
+    seller_result = await session.execute(select(seller.c.id).where(seller.c.user_id == user_id))
+    seller_id = seller_result.scalar()
+    if not seller_id:
+        raise HTTPException(status_code=404, detail=f"Seller not found for user_id {user_id}")
+    
+    result = await session.execute(select(user).where(user.c.id == user_id))
+    user_data = result.fetchone()
+    
+    if not user_data:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    if not user_data.is_seller:
+        raise HTTPException(status_code=403, detail="Only sellers can save clients")
 
-    # Look up the user with the given client_id
-    result = await session.execute(
-        select(user).where(user.c.id == client_id)
-    )
-    client_user = result.fetchone()
+    result = await session.execute(select(user).where(user.c.id == client_id))
+    client_data = result.fetchone()
 
-    if client_user is None:
-        raise HTTPException(status_code=404, detail="Client not found")
+    if not client_data or not client_data.is_client:
+        raise HTTPException(status_code=404, detail="Client not found or not a client")
 
-    # Check if the client is the same as the current user
-    if client_user[0] == current_user_id:
-        raise HTTPException(status_code=400, detail="Cannot save yourself as a client")
-
-    # Check if the client is already saved
-    result = await session.execute(
-        select(saved_client).where(
-            (saved_client.c.seller_id == current_user_id) &
-            (saved_client.c.user_id == client_id)
-        )
-    )
-    existing_client = result.scalar_one_or_none()
-
-    if existing_client:
-        raise HTTPException(status_code=400, detail="Client already saved")
-
-    # Save the client
-    new_saved_client = saved_client.insert().values(
-        seller_id=current_user_id,
-        user_id=client_id
-    )
-    await session.execute(new_saved_client)
+    query = insert(saved_seller).values(user_id=client_id, seller_id=seller_id)
+    await session.execute(query)
     await session.commit()
 
-    return {"detail": "Client saved successfully"}
+    return JSONResponse(
+        status_code=201,
+        content={"message": "Client saved successfully"}
+    )
 
 
-# DELETE Saved Client by ID
-@seller_router.delete("/save_client/{client_id}/", summary="Delete a saved client by ID")
-async def delete_saved_client(
-        client_id: int,
-        token: dict = Depends(verify_token),
-        session: AsyncSession = Depends(get_async_session)
-):
-    if token is None:
-        raise HTTPException(status_code=401, detail="Not registered")
 
-    current_user_id = token.get('user_id')
-
-    # Check if the saved client exists
-    result = await session.execute(select(saved_client).where(
-        (saved_client.c.seller_id == current_user_id) & (saved_client.c.user_id == client_id)
-    ))
-    saved_client_entry = result.scalar_one_or_none()
-
-    if not saved_client_entry:
-        raise HTTPException(status_code=404, detail="Saved client not found")
-
-    # Delete the saved client
-    await session.execute(saved_client.delete().where(
-        (saved_client.c.seller_id == current_user_id) & (saved_client.c.user_id == client_id)
-    ))
-    await session.commit()
-
-    return {"detail": "Saved client deleted successfully"}
-
-
-@seller_router.get("/saved_clients/", summary="Get all saved clients by seller")
+@seller_router.get('/saved_clients', summary="Get Saved Clients")
 async def get_saved_clients(
-        token: dict = Depends(verify_token),
-        session: AsyncSession = Depends(get_async_session)
+    token: dict = Depends(verify_token),
+    session: AsyncSession = Depends(get_async_session)
 ):
     if token is None:
         raise HTTPException(status_code=401, detail="Not registered")
+    
+    user_id = token.get('user_id')
 
-    # Get current user_id from token
-    current_user_id = token.get('user_id')
-
-    # Query to get all saved clients for the current seller
-    result = await session.execute(
-        select(saved_client).where(saved_client.c.seller_id == current_user_id)
-    )
+    seller_result = await session.execute(select(seller.c.id).where(seller.c.user_id == user_id))
+    seller_id = seller_result.scalar()
+    if not seller_id:
+        raise HTTPException(status_code=404, detail=f"Seller not found for user_id {user_id}")
+    result = await session.execute(select(saved_seller).where(saved_seller.c.seller_id == seller_id))
     saved_clients = result.fetchall()
 
     if not saved_clients:
-        raise HTTPException(status_code=404, detail="No clients saved for this seller")
+        raise HTTPException(status_code=404, detail="No saved clients found")
 
-    client_list = []
-    for client in saved_clients:
-        client_dict = {
-            "seller_id": client[0],
-            "user_id": client[1]
-        }
-        client_list.append(client_dict)
+    clients = []
+    for sc in saved_clients:
+        clients.append({
+            "id": sc.id,
+            "seller_id": sc.seller_id,
+            "save_client_id": sc.user_id,
+        })
 
-    return client_list
+    return clients
 
 
-# GET Saved Client by ID
-@seller_router.get("/save_client/{client_id}/", summary="Get a saved client by ID")
-async def get_saved_client(
-        client_id: int,
-        token: dict = Depends(verify_token),
-        session: AsyncSession = Depends(get_async_session)
+
+@seller_router.delete('/saved_clients/{saved_client_id}', summary="Delete Saved Client")
+async def delete_saved_client(
+    saved_client_id: int,
+    token: dict = Depends(verify_token),
+    session: AsyncSession = Depends(get_async_session)
 ):
     if token is None:
         raise HTTPException(status_code=401, detail="Not registered")
+    
+    user_id = token.get('user_id')
 
-    current_user_id = token.get('user_id')
 
-    # Retrieve the saved client by ID and user ID
-    result = await session.execute(select(saved_client).where(
-        (saved_client.c.seller_id == current_user_id) & (saved_client.c.user_id == client_id)
-    ))
-    saved_client_entry = result.scalar_one_or_none()
+    seller_result = await session.execute(select(seller.c.id).where(seller.c.user_id == user_id))
+    seller_id = seller_result.scalar()
+    if not seller_id:
+        raise HTTPException(status_code=404, detail=f"Seller not found for user_id {user_id}")
+    result = await session.execute(select(saved_seller).where(saved_seller.c.seller_id == seller_id, saved_seller.c.user_id == saved_client_id))
+    saved_client_data = result.fetchone()
 
-    if not saved_client_entry:
+    if not saved_client_data:
         raise HTTPException(status_code=404, detail="Saved client not found")
 
-    return saved_client_entry
+    await session.execute(delete(saved_seller).where(saved_seller.c.user_id == saved_client_id))
+    await session.commit()
+
+
+    return JSONResponse(
+        status_code=200,
+        content={"message": "Saved client deleted successfully"}
+    )
+
+
+
+
+
+@seller_router.get("/gigs/{gig_id}/apply", response_model=Dict[str, str])
+async def apply_for_gig(
+    gig_id: int,
+    token: dict = Depends(verify_token),
+    session: AsyncSession = Depends(get_async_session)
+):
+    if token is None:
+        raise HTTPException(status_code=401, detail="Not registered")
+    
+    user_id = token.get('user_id')
+
+ 
+    seller_result = await session.execute(select(seller.c.id).where(seller.c.user_id == user_id))
+    seller_id = seller_result.scalar_one_or_none()
+    if not seller_id:
+        raise HTTPException(status_code=404, detail=f"Seller not found for user_id {user_id}")
+
+
+    result = await session.execute(select(gigs).where(gigs.c.id == gig_id))
+    gig = result.fetchone()
+    if not gig:
+        raise HTTPException(status_code=404, detail="Gig not found")
+
+
+    client_result = await session.execute(select(user).where(user.c.id == gig.user_id))
+    client = client_result.fetchone() 
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    return {
+        "telegram_username": client.telegram_username,
+        "phone_number": client.phone_number
+    }
+
+
+
+
+@router_public.get("/sellers/{occupation_name}/", summary="Get sellers by occupation name")
+async def get_sellers_by_occupation_name(
+    occupation_name: str,
+    session: AsyncSession = Depends(get_async_session)
+) -> Dict:
+ 
+    occupation_query = select(occupation.c.id).where(occupation.c.occup_name.ilike(f"%{occupation_name}%"))
+    occupation_result = await session.execute(occupation_query)
+    occupation_ids = set(occupation_result.scalars().all())
+    
+    if not occupation_ids:
+        raise HTTPException(status_code=404, detail="No occupations found with the given name")
+
+
+    seller_query = select(seller.c.id, seller.c.user_id, seller.c.image_url, seller.c.description, seller.c.cv_url, seller.c.birth_date).join(
+        seller_occupation,
+        seller.c.id == seller_occupation.c.seller_id
+    ).where(seller_occupation.c.occupation_id.in_(occupation_ids))
+    
+    seller_result = await session.execute(seller_query)
+    sellers = [{
+        "id": s.id,
+        "user_id": s.user_id,
+        "image_url": s.image_url,
+        "description": s.description,
+        "cv_url": s.cv_url,
+        "birth_date": s.birth_date
+    } for s in seller_result.fetchall()]
+
+    return {"sellers": sellers}
+
+
+
+@router_public.get('/sellers_by_skill/{skil_name}', summary="Get Sellers by Skill")
+async def get_sellers_by_skill(
+    skill_name: str,
+    session: AsyncSession = Depends(get_async_session)
+):
+
+    result = await session.execute(
+        select(skills.c.id).where(skills.c.skill_name == skill_name)
+    )
+    skill_data = result.fetchone()
+
+    if not skill_data:
+        raise HTTPException(status_code=404, detail="Skill not found")
+
+    skill_id = skill_data.id
+
+   
+    result = await session.execute(
+        select(seller).join(seller_skills).where(seller_skills.c.skill_id == skill_id)
+    )
+    sellers = result.fetchall()
+
+    if not sellers:
+        raise HTTPException(status_code=404, detail="No sellers found with the given skill")
+
+    seller_profiles = []
+    for s in sellers:
+        seller_profiles.append({
+            "id": s.id,
+            "user_id": s.user_id,
+            "image_url": s.image_url,
+            "description": s.description,
+            "cv_url": s.cv_url,
+            "birth_date": s.birth_date
+        })
+
+    return seller_profiles
+
+
+
+@router_public.get("/seller/profile/{seller_id}", summary="Get seller's profile including skills, certificates, experience, and seller details")
+async def get_seller_profile(
+    seller_id:int,
+    session: AsyncSession = Depends(get_async_session)
+) -> Dict:
+    seller_query = select(seller).where(seller.c.id == seller_id)
+    seller_result = await session.execute(seller_query)
+    seller_data = seller_result.fetchone()
+
+    if not seller_data:
+        raise HTTPException(status_code=404, detail=f"Seller not found with id {seller_id}")
+
+    seller_info = {
+        "id": seller_data.id,
+        "user_id": seller_data.user_id,
+        "image_url": seller_data.image_url,
+        "description": seller_data.description,
+        "cv_url": seller_data.cv_url,
+        "birth_date": seller_data.birth_date
+    }
+
+
+    skills_query = select(skills).join(seller_skills).where(seller_skills.c.seller_id == seller_id)
+    skills_result = await session.execute(skills_query)
+    skills_list = [{"id": skill.id, "skill_name": skill.skill_name} for skill in skills_result.fetchall()]
+
+    experience_query = select(experience).where(experience.c.seller_id == seller_id)
+    experience_result = await session.execute(experience_query)
+    experience_list = [{
+        "id": exp.id,
+        "company_name": exp.company_name,
+        "start_date": exp.start_date,
+        "end_date": exp.end_date,
+        "city": exp.city,
+        "country": exp.country,
+        "job_title": exp.job_title,
+        "description": exp.description
+    } for exp in experience_result.fetchall()]
+
+    certificates_query = select(certificate).where(certificate.c.seller_id == seller_id)
+    certificates_result = await session.execute(certificates_query)
+    certificates_list = [{"id": cert.id, "pdf_url": cert.pdf_url} for cert in certificates_result.fetchall()]
+
+    occupations_query = select(occupation).join(seller_occupation).where(seller_occupation.c.seller_id == seller_id)
+    occupations_result = await session.execute(occupations_query)
+    occupations_list = [{"id": occ.id, "occup_name": occ.occup_name} for occ in occupations_result.fetchall()]
+
+
+    return {
+        "seller": seller_info,
+        "skills": skills_list,
+        "experience": experience_list,
+        "certificates": certificates_list,
+        "occupations":occupations_list
+    }
+
+
